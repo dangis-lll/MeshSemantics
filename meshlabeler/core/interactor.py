@@ -20,6 +20,7 @@ class InteractionState:
     control_points_3d: list[tuple[float, float, float]] = field(default_factory=list)
     spline_preview_cell_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     manual_cell_ids: set[int] = field(default_factory=set)
+    excluded_spline_cell_ids: set[int] = field(default_factory=set)
     left_press_pos: tuple[float, float] | None = None
     left_dragging: bool = False
     vtk_drag_started: bool = False
@@ -48,6 +49,7 @@ class MeshInteractor(QObject):
 
     def begin_spline(self) -> None:
         self.state.spline_preview_cell_ids = np.zeros(0, dtype=np.int32)
+        self.state.excluded_spline_cell_ids.clear()
         self.state.control_points_2d.clear()
         self.state.control_points_3d.clear()
         self.state.mode = "SPLINE"
@@ -104,6 +106,10 @@ class MeshInteractor(QObject):
         if watched is not self.vedo_widget.canvas or self.vedo_widget.mesh is None:
             return super().eventFilter(watched, event)
 
+        if event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.RightButton:
+            self._suppress_right_drag = True
+            return True
+
         if event.type() == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.RightButton:
                 self._suppress_right_drag = True
@@ -152,6 +158,9 @@ class MeshInteractor(QObject):
     def current_selection(self) -> np.ndarray:
         manual = np.asarray(sorted(self.state.manual_cell_ids), dtype=np.int32)
         spline = self.state.spline_preview_cell_ids.astype(np.int32)
+        if spline.size and self.state.excluded_spline_cell_ids:
+            excluded = np.asarray(sorted(self.state.excluded_spline_cell_ids), dtype=np.int32)
+            spline = spline[~np.isin(spline, excluded)]
         if manual.size == 0:
             return spline.copy()
         if spline.size == 0:
@@ -181,6 +190,12 @@ class MeshInteractor(QObject):
         cell_id = int(cell_id)
         if cell_id in self.state.manual_cell_ids:
             self.state.manual_cell_ids.remove(cell_id)
+            action = "Deselected"
+        elif cell_id in self.state.excluded_spline_cell_ids:
+            self.state.excluded_spline_cell_ids.remove(cell_id)
+            action = "Re-selected"
+        elif np.any(self.state.spline_preview_cell_ids == cell_id):
+            self.state.excluded_spline_cell_ids.add(cell_id)
             action = "Deselected"
         else:
             self.state.manual_cell_ids.add(cell_id)

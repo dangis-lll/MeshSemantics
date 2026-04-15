@@ -59,12 +59,14 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self.open_folder_dialog)
         save_vtp = QAction("Save VTP", self)
         save_vtp.triggered.connect(self.save_current_vtp)
+        save_json = QAction("Save JSON", self)
+        save_json.triggered.connect(self.save_current_json)
         save_stl = QAction("Export STL", self)
         save_stl.triggered.connect(self.export_stl_per_label)
         undo_action = QAction("Undo", self)
         undo_action.triggered.connect(self.undo)
 
-        for action in [open_file, open_dir, save_vtp, save_stl, undo_action]:
+        for action in [open_file, open_dir, save_vtp, save_json, save_stl, undo_action]:
             toolbar.addAction(action)
 
     def _bind_signals(self) -> None:
@@ -154,6 +156,16 @@ class MainWindow(QMainWindow):
             save_unlabeled=bool(self.settings.get("save_unlabeled_stl", False)),
         )
         self.statusBar().showMessage(f"Exported {len(files)} STL files")
+
+    def save_current_json(self) -> None:
+        if self.vedo_widget.mesh is None:
+            return
+        default_path = Path(self.current_path or "mesh.json").with_suffix(".json")
+        target, _ = QFileDialog.getSaveFileName(self, "Save JSON", str(default_path), "JSON (*.json)")
+        if not target:
+            return
+        FileIO.save_labels_json(target, self.label_engine.label_array)
+        self.statusBar().showMessage(f"Saved JSON to {target}")
 
     def undo(self) -> None:
         if self.label_engine.undo():

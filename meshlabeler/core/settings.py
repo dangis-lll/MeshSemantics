@@ -11,6 +11,7 @@ from meshlabeler.config.defaults import (
     DEFAULT_COLORMAP,
     DEFAULT_SETTINGS,
     SETTINGS_PATH,
+    preset_label_rgb,
 )
 
 
@@ -91,6 +92,10 @@ def load_colormap(path: str | Path | None = None) -> dict[str, tuple[int, int, i
         colormap["_default"] = tuple(DEFAULT_COLORMAP["_default"])
     if "0" not in colormap:
         colormap["0"] = tuple(DEFAULT_COLORMAP["0"])
+    for label in range(1, 33):
+        preset = preset_label_rgb(label)
+        if preset is not None:
+            colormap[str(label)] = tuple(preset)
     return colormap
 
 

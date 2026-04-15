@@ -14,11 +14,14 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QAbstractItemView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from meshlabeler.config.defaults import preset_label_rgb
 
 
 class ColorChip(QFrame):
@@ -38,6 +41,7 @@ class LabelPanel(QDockWidget):
     label_changed = pyqtSignal(int)
     colormap_changed = pyqtSignal(dict)
     remap_requested = pyqtSignal(int, int)
+    delete_requested = pyqtSignal(int)
 
     def __init__(self, colormap: dict[str, tuple[int, int, int]], max_label: int, parent=None) -> None:
         super().__init__("Labels", parent)
@@ -90,15 +94,37 @@ class LabelPanel(QDockWidget):
         swap_layout.addWidget(swap_label)
         swap_layout.addLayout(row)
 
+        table_frame = QFrame()
+        table_frame.setProperty("panel", True)
+        table_layout = QVBoxLayout(table_frame)
+        table_layout.setContentsMargins(12, 12, 12, 12)
+        table_layout.setSpacing(8)
+
+        table_header = QHBoxLayout()
+        table_label = QLabel("Label List")
+        table_label.setProperty("role", "caption")
+        self.delete_label_button = QPushButton("Delete Label")
+        self.delete_label_button.clicked.connect(self._emit_delete_label)
+        table_header.addWidget(table_label)
+        table_header.addStretch(1)
+        table_header.addWidget(self.delete_label_button)
+
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Label", "Color"])
         self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.itemDoubleClicked.connect(self._edit_color)
         self.table.itemChanged.connect(self._sync_colormap_from_table)
+        self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
+
+        table_layout.addLayout(table_header)
+        table_layout.addWidget(self.table, 1)
 
         outer.addWidget(top)
         outer.addWidget(swap_frame)
-        outer.addWidget(self.table, 1)
+        outer.addWidget(table_frame, 1)
         self.setWidget(content)
 
         self.set_colormap(colormap)
@@ -109,6 +135,18 @@ class LabelPanel(QDockWidget):
 
     def colormap(self) -> dict[str, tuple[int, int, int]]:
         return dict(self._colormap)
+
+    def snapshot_state(self) -> dict:
+        return {
+            "colormap": self.colormap(),
+            "current_label": self.current_label(),
+        }
+
+    def restore_state(self, state: dict) -> None:
+        colormap = state.get("colormap", self.colormap())
+        current_label = int(state.get("current_label", 0))
+        self.set_colormap(colormap)
+        self.label_spin.setValue(current_label)
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
         self._colormap = dict(colormap)
@@ -121,6 +159,8 @@ class LabelPanel(QDockWidget):
         for row, (key, rgb) in enumerate(items):
             label_item = QTableWidgetItem(str(key))
             color_item = QTableWidgetItem(f"{rgb[0]}, {rgb[1]}, {rgb[2]}")
+            label_item.setFlags(label_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            color_item.setFlags(color_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             color_item.setBackground(QColor(*rgb))
             self.table.setItem(row, 0, label_item)
             self.table.setItem(row, 1, color_item)
@@ -131,6 +171,7 @@ class LabelPanel(QDockWidget):
         self.swap_b.clear()
         self.swap_a.addItems(labels)
         self.swap_b.addItems(labels)
+        self._select_row_for_label(self.current_label())
         self._refresh_chip()
 
     def ensure_label(self, label: int) -> bool:
@@ -142,13 +183,38 @@ class LabelPanel(QDockWidget):
         self.colormap_changed.emit(self.colormap())
         return True
 
+    def ensure_labels(self, labels: list[int]) -> bool:
+        changed = False
+        for label in sorted({int(v) for v in labels if int(v) >= 0}):
+            key = str(label)
+            if key in self._colormap:
+                continue
+            self._colormap[key] = self._generate_distinct_color(label)
+            changed = True
+        if changed:
+            self.set_colormap(self._colormap)
+            self.colormap_changed.emit(self.colormap())
+        return changed
+
     def add_next_label(self) -> None:
-        labels = [int(key) for key in self._colormap.keys() if key not in {"0", "_default"}]
-        next_label = max(labels, default=0) + 1
-        if next_label > self.label_spin.maximum():
-            return
-        self.ensure_label(next_label)
-        self.label_spin.setValue(next_label)
+        current = self.current_label()
+        max_label = self.label_spin.maximum()
+        for next_label in range(current + 1, max_label + 1):
+            if self.ensure_label(next_label):
+                self.label_spin.setValue(next_label)
+                return
+
+    def remove_label(self, label: int) -> bool:
+        key = str(int(label))
+        if key == "0" or key not in self._colormap:
+            return False
+        previous_label = self._previous_existing_label(int(label))
+        del self._colormap[key]
+        self.set_colormap(self._colormap)
+        if self.current_label() == int(label):
+            self.label_spin.setValue(previous_label)
+        self.colormap_changed.emit(self.colormap())
+        return True
 
     def refresh_stats(self, total_cells: int, labeled_cells: int) -> None:
         self.setWindowTitle(f"Labels  |  {labeled_cells}/{total_cells}")
@@ -156,6 +222,12 @@ class LabelPanel(QDockWidget):
     def _emit_swap(self) -> None:
         if self.swap_a.currentText() and self.swap_b.currentText():
             self.remap_requested.emit(int(self.swap_a.currentText()), int(self.swap_b.currentText()))
+
+    def _emit_delete_label(self) -> None:
+        label = self.selected_table_label()
+        if label <= 0:
+            return
+        self.delete_requested.emit(label)
 
     def _edit_color(self, item: QTableWidgetItem) -> None:
         if item.column() != 1:
@@ -198,10 +270,54 @@ class LabelPanel(QDockWidget):
 
     def _on_label_value_changed(self, value: int) -> None:
         self.ensure_label(value)
+        self._select_row_for_label(value)
         self._refresh_chip()
         self.label_changed.emit(value)
 
+    def selected_table_label(self) -> int:
+        items = self.table.selectedItems()
+        if not items:
+            return 0
+        label_item = self.table.item(items[0].row(), 0)
+        if label_item is None:
+            return 0
+        try:
+            return int(label_item.text())
+        except ValueError:
+            return 0
+
+    def _sync_current_label_from_selection(self) -> None:
+        label = self.selected_table_label()
+        if label == self.current_label():
+            return
+        self.label_spin.blockSignals(True)
+        self.label_spin.setValue(label)
+        self.label_spin.blockSignals(False)
+        self._refresh_chip()
+        self.label_changed.emit(label)
+
+    def _select_row_for_label(self, label: int) -> None:
+        target = str(int(label))
+        self.table.blockSignals(True)
+        self.table.clearSelection()
+        for row in range(self.table.rowCount()):
+            label_item = self.table.item(row, 0)
+            if label_item is not None and label_item.text() == target:
+                self.table.selectRow(row)
+                break
+        self.table.blockSignals(False)
+
+    def _previous_existing_label(self, label: int) -> int:
+        labels = sorted(
+            int(key) for key in self._colormap.keys()
+            if key not in {"0", "_default"} and int(key) < int(label)
+        )
+        return labels[-1] if labels else 0
+
     def _generate_distinct_color(self, label: int) -> tuple[int, int, int]:
+        preset = preset_label_rgb(label)
+        if preset is not None:
+            return tuple(preset)
         hue = (label * 0.61803398875) % 1.0
         saturation = 0.68 + 0.12 * ((label % 3) / 2.0)
         value = 0.92 - 0.08 * (label % 2)

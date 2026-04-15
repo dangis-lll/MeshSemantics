@@ -22,22 +22,38 @@ def _rgb_triplet(hue: float, saturation: float, value: float) -> list[int]:
     return [int(round(channel * 255)) for channel in rgb]
 
 
+def preset_label_rgb(label: int) -> list[int] | None:
+    if not 1 <= int(label) <= 32:
+        return None
+
+    base_hues = [
+        0.0 / 360.0,    # red
+        30.0 / 360.0,   # orange
+        55.0 / 360.0,   # yellow
+        120.0 / 360.0,  # green
+        180.0 / 360.0,  # cyan
+        240.0 / 360.0,  # blue
+        270.0 / 360.0,  # violet
+        315.0 / 360.0,  # magenta
+    ]
+    saturation_steps = [0.90, 0.72, 0.54, 0.36]
+    value = 0.94
+
+    label_index = int(label) - 1
+    hue = base_hues[label_index % 8]
+    saturation = saturation_steps[label_index // 8]
+    return _rgb_triplet(hue, saturation, value)
+
+
 def build_default_colormap() -> dict[str, list[int]]:
     colormap: dict[str, list[int]] = {
         "0": [232, 236, 242],
         "_default": [90, 117, 168],
     }
-    group_hues = [
-        205.0 / 360.0,
-        152.0 / 360.0,
-        35.0 / 360.0,
-        325.0 / 360.0,
-    ]
-    value_steps = [0.97, 0.90, 0.83, 0.76, 0.69, 0.62, 0.55, 0.48]
-    for group_index, hue in enumerate(group_hues):
-        for offset, value in enumerate(value_steps):
-            label = group_index * 8 + offset + 1
-            colormap[str(label)] = _rgb_triplet(hue, 0.58, value)
+    for label in range(1, 33):
+        preset = preset_label_rgb(label)
+        if preset is not None:
+            colormap[str(label)] = preset
     return colormap
 
 
@@ -49,6 +65,7 @@ DEFAULT_SETTINGS = {
     "exclude_backfaces": True,
     "save_unlabeled_stl": False,
     "window_size": [1560, 980],
+    "last_open_dir": "",
     "min_label": 1,
     "max_label": 255,
 }

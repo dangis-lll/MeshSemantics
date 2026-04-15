@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import colorsys
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
+    QCheckBox,
     QDockWidget,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QAbstractItemView,
     QTableWidget,
@@ -42,11 +45,15 @@ class LabelPanel(QDockWidget):
     colormap_changed = pyqtSignal(dict)
     remap_requested = pyqtSignal(int, int)
     delete_requested = pyqtSignal(int)
+    completion_toggle_requested = pyqtSignal()
+    quick_save_requested = pyqtSignal()
 
     def __init__(self, colormap: dict[str, tuple[int, int, int]], max_label: int, parent=None) -> None:
         super().__init__("Labels", parent)
         self.setObjectName("label-panel")
         self._colormap = dict(colormap)
+        self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
+        self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
 
         content = QWidget(self)
         outer = QVBoxLayout(content)
@@ -122,9 +129,23 @@ class LabelPanel(QDockWidget):
         table_layout.addLayout(table_header)
         table_layout.addWidget(self.table, 1)
 
+        footer_row = QHBoxLayout()
+        footer_row.setSpacing(8)
+        self.quick_save_button = QPushButton("Quick Save")
+        self.quick_save_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.quick_save_button.clicked.connect(self.quick_save_requested.emit)
+        footer_row.addWidget(self.quick_save_button)
+        self.complete_checkbox = QCheckBox("Completed")
+        self.complete_checkbox.setObjectName("completion-toggle")
+        self.complete_checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.complete_checkbox.setStyleSheet(self._completion_checkbox_qss())
+        self.complete_checkbox.clicked.connect(self.completion_toggle_requested.emit)
+        footer_row.addWidget(self.complete_checkbox)
+
         outer.addWidget(top)
         outer.addWidget(swap_frame)
         outer.addWidget(table_frame, 1)
+        outer.addLayout(footer_row)
         self.setWidget(content)
 
         self.set_colormap(colormap)
@@ -218,6 +239,46 @@ class LabelPanel(QDockWidget):
 
     def refresh_stats(self, total_cells: int, labeled_cells: int) -> None:
         self.setWindowTitle(f"Labels  |  {labeled_cells}/{total_cells}")
+
+    def set_completion_state(self, is_completed: bool) -> None:
+        self.complete_checkbox.blockSignals(True)
+        self.complete_checkbox.setChecked(is_completed)
+        self.complete_checkbox.setText("Completed")
+        self.complete_checkbox.blockSignals(False)
+        self.complete_checkbox.setEnabled(True)
+
+    def _asset_url(self, filename: str) -> str:
+        path = Path(__file__).resolve().parents[1] / "assets" / filename
+        return path.as_posix()
+
+    def _completion_checkbox_qss(self) -> str:
+        return (
+            "QCheckBox#completion-toggle {"
+            " color: #334a68;"
+            " font-weight: 600;"
+            " spacing: 8px;"
+            " min-height: 16px;"
+            " padding: 8px 14px;"
+            " border: 1px solid rgba(132, 162, 210, 0.34);"
+            " border-radius: 10px;"
+            " background: rgba(255, 255, 255, 0.98);"
+            "}"
+            "QCheckBox#completion-toggle:checked {"
+            " color: #c73333;"
+            " font-weight: 800;"
+            "}"
+            "QCheckBox#completion-toggle:hover {"
+            " background: rgba(245, 249, 255, 0.98);"
+            "}"
+            "QCheckBox#completion-toggle::indicator {"
+            " width: 18px;"
+            " height: 18px;"
+            f" image: url({self._checkbox_unchecked_asset});"
+            "}"
+            "QCheckBox#completion-toggle::indicator:checked {"
+            f" image: url({self._checkbox_checked_asset});"
+            "}"
+        )
 
     def _emit_swap(self) -> None:
         if self.swap_a.currentText() and self.swap_b.currentText():

@@ -66,6 +66,8 @@ DEFAULT_SETTINGS = {
     "save_unlabeled_stl": False,
     "window_size": [1560, 980],
     "last_open_dir": "",
+    "last_file_by_folder": {},
+    "status_by_file": {},
     "min_label": 1,
     "max_label": 255,
 }

@@ -39,6 +39,13 @@ QToolButton:hover, QPushButton:hover {
 QToolButton:pressed, QPushButton:pressed {
     background: rgba(52, 111, 210, 0.95);
 }
+QToolButton#undo-button, QToolButton#redo-button {
+    padding: 8px;
+    min-width: 40px;
+    min-height: 16px;
+    max-width: 40px;
+    max-height: 34px;
+}
 QDockWidget {
     color: #21334d;
     titlebar-close-icon: none;
@@ -50,7 +57,7 @@ QDockWidget::title {
     background: rgba(247, 250, 255, 0.98);
     border-bottom: 1px solid rgba(114, 151, 208, 0.16);
 }
-QLineEdit, QSpinBox, QComboBox, QTableWidget, QTreeView, QProgressBar {
+QLineEdit, QSpinBox, QComboBox, QTableWidget, QTableView, QTreeView, QProgressBar {
     background: rgba(255, 255, 255, 0.98);
     border: 1px solid rgba(132, 162, 210, 0.34);
     border-radius: 10px;
@@ -65,7 +72,7 @@ QHeaderView::section {
     border-bottom: 1px solid rgba(132, 162, 210, 0.18);
     padding: 8px;
 }
-QTreeView::item, QTableWidget::item {
+QTreeView::item, QTableWidget::item, QTableView::item {
     padding: 4px;
 }
 QLabel[role="caption"] {

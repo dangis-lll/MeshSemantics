@@ -485,7 +485,7 @@ class MainWindow(QMainWindow):
             self._update_mesh_view()
             self._update_current_status_after_edit()
             self.statusBar().showMessage(f"Assigned label {self.label_panel.current_label()} to {len(cell_ids)} cells")
-        self.interactor.clear_preview(emit_preview=False)
+        self.interactor.clear_preview()
 
     def _remap_labels(self, source: int, target: int) -> None:
         before_labels, before_ui, dirty_before = self._capture_history_state()

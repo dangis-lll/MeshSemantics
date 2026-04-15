@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import sys
 
 import numpy as np
 
-from PyQt6.QtCore import QObject, QSize, Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -19,26 +21,27 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from meshlabeler.core.file_io import FileIO
-from meshlabeler.core.interactor import MeshInteractor
-from meshlabeler.core.label_engine import LabelEngine
-from meshlabeler.core.project_dataset import (
+from meshsemantics.core.file_io import FileIO
+from meshsemantics.core.interactor import MeshInteractor
+from meshsemantics.core.label_engine import LabelEngine
+from meshsemantics.core.project_dataset import (
     ProjectDataset,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_IN_PROGRESS,
     STATUS_UNLABELED,
-    build_status_index,
-    mark_current_entry,
+    build_relative_status_index,
+    build_work_path_status_index,
+    compute_next_pending_path,
     normalize_path,
     scan_project_dataset,
-    update_entry_status,
 )
-from meshlabeler.core.settings import load_colormap, load_settings, save_colormap, save_settings
-from meshlabeler.ui.file_panel import FilePanel
-from meshlabeler.ui.label_panel import LabelPanel
-from meshlabeler.ui.style import APP_QSS
-from meshlabeler.ui.vedo_widget import VedoWidget
+from meshsemantics.core.project_status_store import load_project_statuses, save_project_statuses
+from meshsemantics.core.settings import load_colormap, load_settings, save_colormap, save_settings
+from meshsemantics.ui.file_panel import FilePanel
+from meshsemantics.ui.label_panel import LabelPanel
+from meshsemantics.ui.style import APP_QSS
+from meshsemantics.ui.vedo_widget import VedoWidget
 
 
 @dataclass
@@ -53,6 +56,7 @@ class HistoryRecord:
 
 class ProjectScanWorker(QObject):
     finished = pyqtSignal(int, object)
+    progress = pyqtSignal(int, int, str)
 
     def __init__(
         self,
@@ -60,30 +64,40 @@ class ProjectScanWorker(QObject):
         folder: str,
         preferred_path: str | None,
         last_file: str | None,
-        status_by_file: dict[str, str],
     ) -> None:
         super().__init__()
         self.request_id = request_id
         self.folder = folder
         self.preferred_path = preferred_path
         self.last_file = last_file
-        self.status_by_file = status_by_file
 
     @pyqtSlot()
     def run(self) -> None:
+        status_by_relative_path = load_project_statuses(self.folder)
         dataset = scan_project_dataset(
             self.folder,
             last_file=self.last_file,
             current_file=self.preferred_path,
-            status_by_file=self.status_by_file,
+            status_by_relative_path=status_by_relative_path,
+            progress_callback=self._emit_progress,
         )
-        self.finished.emit(self.request_id, dataset)
+        self.finished.emit(
+            self.request_id,
+            {
+                "dataset": dataset,
+                "status_by_relative_path": status_by_relative_path,
+            },
+        )
+
+    def _emit_progress(self, scanned_files: int, latest_path: str) -> None:
+        self.progress.emit(self.request_id, scanned_files, latest_path)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.settings = load_settings()
+        had_legacy_status_map = self.settings.pop("status_by_file", None) is not None
         self.colormap = load_colormap()
         self.current_path: str | None = None
         self.project_dataset: ProjectDataset | None = None
@@ -95,6 +109,21 @@ class MainWindow(QMainWindow):
         self._active_scan_auto_load = True
         self._scan_thread: QThread | None = None
         self._scan_worker: ProjectScanWorker | None = None
+        self._project_status_root: str | None = None
+        self._project_status_by_relative_path: dict[str, str] = {}
+        self._project_status_by_work_path: dict[str, str] = {}
+        self._project_status_save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="meshsemantics-status")
+        self._project_status_save_future: Future | None = None
+        self._project_status_save_lock = threading.Lock()
+        self._pending_project_status_save: tuple[str, dict[str, str]] | None = None
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.setInterval(300)
+        self._settings_save_timer.timeout.connect(self._flush_settings)
+        self._project_status_save_timer = QTimer(self)
+        self._project_status_save_timer.setSingleShot(True)
+        self._project_status_save_timer.setInterval(300)
+        self._project_status_save_timer.timeout.connect(self._flush_project_statuses)
 
         self.label_engine = LabelEngine(undo_limit=int(self.settings.get("undo_limit", 50)))
         self.vedo_widget = VedoWidget()
@@ -108,10 +137,12 @@ class MainWindow(QMainWindow):
         self._bind_shortcuts()
         self.file_panel.set_project(None)
         self._refresh_completion_action()
+        if had_legacy_status_map:
+            self._schedule_settings_save()
         self._restore_last_project()
 
     def _configure_window(self) -> None:
-        self.setWindowTitle("MeshLabeler")
+        self.setWindowTitle("MeshSemantics")
         width, height = self.settings.get("window_size", [1560, 980])
         self.resize(int(width), int(height))
         self.setAcceptDrops(True)
@@ -199,12 +230,13 @@ class MainWindow(QMainWindow):
     def open_folder_dialog(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Open Folder", str(self.last_open_dir))
         if folder:
-            self.open_project(folder, auto_load=True)
+            self.open_project(folder, auto_load=False)
 
     def open_project(self, folder: str | Path, preferred_path: str | Path | None = None, auto_load: bool = True) -> None:
         normalized_folder = normalize_path(folder)
         if normalized_folder is None:
             return
+        self._flush_project_statuses()
         self._set_last_open_dir(normalized_folder)
         last_file = normalize_path(preferred_path) or self._last_file_for_folder(normalized_folder)
         self._active_scan_request += 1
@@ -218,10 +250,10 @@ class MainWindow(QMainWindow):
             folder=normalized_folder,
             preferred_path=normalize_path(preferred_path),
             last_file=last_file,
-            status_by_file=dict(self.settings.get("status_by_file", {})),
         )
         self._scan_worker.moveToThread(self._scan_thread)
         self._scan_thread.started.connect(self._scan_worker.run)
+        self._scan_worker.progress.connect(self._handle_project_scan_progress)
         self._scan_worker.finished.connect(self._handle_project_scan_finished)
         self._scan_worker.finished.connect(self._scan_thread.quit)
         self._scan_worker.finished.connect(self._scan_worker.deleteLater)
@@ -232,8 +264,16 @@ class MainWindow(QMainWindow):
     def _handle_project_scan_finished(self, request_id: int, dataset_obj: object) -> None:
         if request_id != self._active_scan_request:
             return
-        dataset = dataset_obj if isinstance(dataset_obj, ProjectDataset) else None
+        payload = dataset_obj if isinstance(dataset_obj, dict) else {}
+        dataset = payload.get("dataset") if isinstance(payload.get("dataset"), ProjectDataset) else None
+        status_by_relative_path = payload.get("status_by_relative_path", {})
+        if not isinstance(status_by_relative_path, dict):
+            status_by_relative_path = {}
+
         self.project_dataset = dataset
+        self._project_status_root = dataset.root_path if dataset is not None else None
+        self._project_status_by_relative_path = dict(status_by_relative_path)
+        self._project_status_by_work_path = build_work_path_status_index(dataset, self._project_status_by_relative_path)
         self.file_panel.set_busy(False)
         self.file_panel.set_project(dataset)
         self._refresh_completion_action()
@@ -251,6 +291,19 @@ class MainWindow(QMainWindow):
         if self.current_path and normalize_path(self.current_path) == normalize_path(suggested_path) and self.vedo_widget.mesh is not None:
             return
         self.load_mesh(suggested_path)
+
+    @pyqtSlot(int, int, str)
+    def _handle_project_scan_progress(self, request_id: int, scanned_files: int, latest_path: str) -> None:
+        if request_id != self._active_scan_request:
+            return
+        if scanned_files <= 0:
+            self.file_panel.set_busy(True, "Scanning folder...")
+            return
+        message = f"Scanning folder... {scanned_files} meshes"
+        if latest_path:
+            message = f"{message} | {latest_path}"
+        self.file_panel.set_busy(True, message)
+        self.statusBar().showMessage(message)
 
     def open_next_pending(self) -> None:
         if self.project_dataset is None or not self.project_dataset.next_pending_path:
@@ -275,7 +328,7 @@ class MainWindow(QMainWindow):
         if normalized_path is None:
             return
         if not self._prepare_for_model_switch(normalized_path):
-            self.file_panel.set_project(self.project_dataset)
+            self.file_panel.set_current_path(self.current_path)
             return
 
         previous_path = self.current_path
@@ -284,8 +337,14 @@ class MainWindow(QMainWindow):
         self._remember_last_file(self._project_root_or_parent(normalized_path), normalized_path)
 
         if self.project_dataset is not None:
-            self.project_dataset = mark_current_entry(self.project_dataset, normalized_path)
-            self.file_panel.set_project(self.project_dataset)
+            self.project_dataset = ProjectDataset(
+                root_path=self.project_dataset.root_path,
+                entries=self.project_dataset.entries,
+                current_path=normalized_path,
+                next_pending_path=self.project_dataset.next_pending_path,
+                suggested_path=normalized_path,
+            )
+            self.file_panel.set_current_path(normalized_path)
 
         self.file_panel.set_busy(True, "Loading mesh...")
         try:
@@ -293,6 +352,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.file_panel.set_busy(False)
             self._record_status(normalized_path, STATUS_FAILED)
+            self._project_status_by_work_path[normalized_path] = STATUS_FAILED
             self.project_dataset = previous_project
             self.current_path = previous_path
             self.file_panel.set_project(self.project_dataset)
@@ -320,8 +380,10 @@ class MainWindow(QMainWindow):
         self.settings["window_size"] = [int(self.width()), int(self.height())]
         self.settings["last_open_dir"] = str(self.last_open_dir)
         self._persist_project_statuses()
-        save_settings(self.settings)
+        self._flush_project_statuses(block=True)
+        self._flush_settings()
         self.file_panel.stop()
+        self._project_status_save_executor.shutdown(wait=True)
         super().closeEvent(event)
 
     def quick_save_current(self) -> bool:
@@ -423,7 +485,7 @@ class MainWindow(QMainWindow):
             self._update_mesh_view()
             self._update_current_status_after_edit()
             self.statusBar().showMessage(f"Assigned label {self.label_panel.current_label()} to {len(cell_ids)} cells")
-        self.interactor.clear_preview()
+        self.interactor.clear_preview(emit_preview=False)
 
     def _remap_labels(self, source: int, target: int) -> None:
         before_labels, before_ui, dirty_before = self._capture_history_state()
@@ -532,7 +594,7 @@ class MainWindow(QMainWindow):
         resolved = path.resolve()
         self.last_open_dir = resolved
         self.settings["last_open_dir"] = str(resolved)
-        save_settings(self.settings)
+        self._schedule_settings_save()
 
     def _save_vtp_to_path(self, target: str) -> bool:
         if not target or self.vedo_widget.mesh is None:
@@ -551,6 +613,7 @@ class MainWindow(QMainWindow):
         if status == STATUS_FAILED:
             status = self._base_status_for_work(normalized_target)
         self._record_status(normalized_target, status)
+        self._project_status_by_work_path[normalized_target] = status
         project_root = self._project_root_or_parent(normalized_target)
         self._remember_last_file(project_root, normalized_target)
 
@@ -630,20 +693,23 @@ class MainWindow(QMainWindow):
         normalized = normalize_path(file_path)
         if normalized is None:
             return
-        status_map = dict(self.settings.get("status_by_file", {}))
-        status_map[normalized] = status
-        self.settings["status_by_file"] = status_map
-        save_settings(self.settings)
+        relative_path = self._relative_status_key(normalized)
+        if relative_path is None:
+            return
+        self._project_status_by_relative_path[relative_path] = status
+        self._schedule_project_status_save()
 
     def _remember_last_file(self, folder: str | Path, file_path: str | Path) -> None:
         normalized_folder = normalize_path(folder)
         normalized_file = normalize_path(file_path)
         if normalized_folder is None or normalized_file is None:
             return
-        mapping = dict(self.settings.get("last_file_by_folder", {}))
+        mapping = self.settings.get("last_file_by_folder")
+        if not isinstance(mapping, dict):
+            mapping = {}
         mapping[normalized_folder] = normalized_file
         self.settings["last_file_by_folder"] = mapping
-        save_settings(self.settings)
+        self._schedule_settings_save()
 
     def _last_file_for_folder(self, folder: str | Path) -> str | None:
         normalized_folder = normalize_path(folder)
@@ -655,29 +721,47 @@ class MainWindow(QMainWindow):
     def _persist_project_statuses(self) -> None:
         if self.project_dataset is None:
             return
-        status_map = dict(self.settings.get("status_by_file", {}))
-        status_map.update(build_status_index(self.project_dataset))
-        self.settings["status_by_file"] = status_map
-        save_settings(self.settings)
+        self._project_status_root = self.project_dataset.root_path
+        self._project_status_by_relative_path = build_relative_status_index(self.project_dataset)
+        self._project_status_by_work_path = build_work_path_status_index(self.project_dataset, self._project_status_by_relative_path)
+        self._schedule_project_status_save()
 
     def _current_entry_status(self, file_path: str | None = None) -> str | None:
         target = normalize_path(file_path or self.current_path)
         if target is None:
             return None
-        if self.project_dataset is not None:
-            for entry in self.project_dataset.entries:
-                if entry.work_path == target or entry.source_path == target:
-                    return entry.status
-        return self.settings.get("status_by_file", {}).get(target)
+        status = self._project_status_by_work_path.get(target)
+        if status:
+            return status
+        relative_path = self._relative_status_key(target)
+        if relative_path is None:
+            return None
+        return self._project_status_by_relative_path.get(relative_path)
 
     def _set_current_status(self, status: str, persist_only: bool = False) -> None:
         if self.current_path is None:
             return
+        current_status = self._current_entry_status()
+        if current_status == status:
+            self._refresh_completion_action()
+            return
         self._record_status(self.current_path, status)
+        self._project_status_by_work_path[self.current_path] = status
         if self.project_dataset is not None:
-            self.project_dataset = update_entry_status(self.project_dataset, self.current_path, status)
-            self.project_dataset = mark_current_entry(self.project_dataset, self.current_path)
-            self.file_panel.set_project(self.project_dataset)
+            next_pending_path = compute_next_pending_path(
+                self.project_dataset,
+                self._project_status_by_work_path,
+                self.current_path,
+            )
+            self.project_dataset = ProjectDataset(
+                root_path=self.project_dataset.root_path,
+                entries=self.project_dataset.entries,
+                current_path=self.current_path,
+                next_pending_path=next_pending_path,
+                suggested_path=self.project_dataset.suggested_path,
+            )
+            self.file_panel.update_status(self.current_path, status, next_pending_path)
+            self.file_panel.set_current_path(self.current_path)
         self._refresh_completion_action()
         if persist_only:
             return
@@ -698,7 +782,7 @@ class MainWindow(QMainWindow):
             return
         initial_dir = Path(saved_dir).expanduser()
         if initial_dir.exists():
-            self.open_project(initial_dir, auto_load=True)
+            self.open_project(initial_dir, auto_load=False)
 
     def _asset_path(self, filename: str) -> Path:
         return Path(__file__).resolve().parents[1] / "assets" / filename
@@ -768,3 +852,62 @@ class MainWindow(QMainWindow):
             return self.project_dataset.root_path
         except Exception:
             return str(target_path.parent.resolve())
+
+    def _schedule_settings_save(self) -> None:
+        self._settings_save_timer.start()
+
+    def _flush_settings(self) -> None:
+        self._settings_save_timer.stop()
+        save_settings(self.settings)
+
+    def _schedule_project_status_save(self) -> None:
+        self._project_status_save_timer.start()
+
+    def _flush_project_statuses(self, *, block: bool = False) -> None:
+        self._project_status_save_timer.stop()
+        if not self._project_status_root:
+            return
+        root = self._project_status_root
+        snapshot = dict(self._project_status_by_relative_path)
+        if block:
+            future = self._project_status_save_future
+            if future is not None:
+                future.result()
+            save_project_statuses(root, snapshot)
+            return
+        self._enqueue_project_status_save(root, snapshot)
+
+    def _enqueue_project_status_save(self, root: str, snapshot: dict[str, str]) -> None:
+        with self._project_status_save_lock:
+            future = self._project_status_save_future
+            if future is not None and not future.done():
+                self._pending_project_status_save = (root, snapshot)
+                return
+            self._project_status_save_future = self._project_status_save_executor.submit(
+                save_project_statuses,
+                root,
+                snapshot,
+            )
+            self._project_status_save_future.add_done_callback(self._on_project_status_save_done)
+
+    def _on_project_status_save_done(self, _future: Future) -> None:
+        pending: tuple[str, dict[str, str]] | None = None
+        with self._project_status_save_lock:
+            pending = self._pending_project_status_save
+            self._pending_project_status_save = None
+            self._project_status_save_future = None
+        if pending is not None:
+            root, snapshot = pending
+            self._enqueue_project_status_save(root, snapshot)
+
+    def _relative_status_key(self, file_path: str | Path) -> str | None:
+        root = self._project_status_root or (self.project_dataset.root_path if self.project_dataset is not None else None)
+        if not root:
+            return None
+        normalized = normalize_path(file_path)
+        if normalized is None:
+            return None
+        try:
+            return str(Path(normalized).relative_to(Path(root)).with_suffix("")).replace("/", "\\")
+        except Exception:
+            return None

@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from meshlabeler.config.defaults import (
+from meshsemantics.config.defaults import (
     APP_DIR,
     COLORMAP_PATH,
     DEFAULT_COLORMAP,
@@ -16,7 +16,8 @@ from meshlabeler.config.defaults import (
 
 
 def _workspace_fallback_dir() -> Path:
-    return Path.cwd() / ".meshlabeler"
+    return Path.cwd() / ".meshsemantics"
+
 
 
 def ensure_app_files() -> None:
@@ -55,13 +56,18 @@ def resolve_storage_path(path: Path) -> Path:
         return fallback_dir / path.name
 
 
+
 def _load_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
     ensure_app_files()
-    path = resolve_storage_path(path)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        payload = {}
+    resolved_path = resolve_storage_path(path)
+    candidates = [resolved_path]
+    payload = {}
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+            break
+        except Exception:
+            continue
     data = deepcopy(fallback)
     if isinstance(payload, dict):
         data.update(payload)

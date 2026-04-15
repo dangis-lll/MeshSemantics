@@ -35,6 +35,8 @@ class VedoWidget(QWidget):
         self.mesh = None
         self.base_labels = np.zeros(0, dtype=np.int32)
         self.display_labels = np.zeros(0, dtype=np.int32)
+        self.preview_cell_ids = np.zeros(0, dtype=np.int32)
+        self._label_vtk_array = None
         self.lookup_table = vtkLookupTable()
         self.lookup_table.IndexedLookupOff()
         self.lookup_table.SetNumberOfTableValues(257)
@@ -49,11 +51,13 @@ class VedoWidget(QWidget):
         self.plotter.clear()
         self.mesh = mesh.clone(deep=True)
         self.mesh.filename = getattr(mesh, "filename", "")
-        self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1)
+        self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1).copy()
         self.display_labels = self.base_labels.copy()
+        self.preview_cell_ids = np.zeros(0, dtype=np.int32)
         self._rebuild_geometry_cache()
         self._apply_lookup_table(colormap)
-        self._write_display_labels()
+        self._bind_label_array()
+        self._mark_label_array_modified()
         self.mesh.lighting("default").phong().linewidth(0.2)
         self.plotter.show(self.mesh, resetcam=True)
         self.mesh_loaded.emit(int(self.base_labels.size))
@@ -65,19 +69,31 @@ class VedoWidget(QWidget):
         self.render()
 
     def update_labels(self, labels: np.ndarray) -> None:
-        self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1)
-        self.display_labels = self.base_labels.copy()
-        self._write_display_labels()
+        incoming = np.asarray(labels, dtype=np.int32).reshape(-1)
+        if self.base_labels.shape != incoming.shape:
+            self.base_labels = incoming.copy()
+            self.display_labels = self.base_labels.copy()
+            self.preview_cell_ids = np.zeros(0, dtype=np.int32)
+            self._bind_label_array()
+        else:
+            self.base_labels[:] = incoming
+            self.display_labels[:] = self.base_labels
+            self.preview_cell_ids = np.zeros(0, dtype=np.int32)
+        self._mark_label_array_modified()
         self.render()
 
     def preview_cells(self, cell_ids) -> None:
         if self.mesh is None:
             return
-        self.display_labels = self.base_labels.copy()
         ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
         ids = ids[(ids >= 0) & (ids < self.display_labels.size)]
-        self.display_labels[ids] = 256
-        self._write_display_labels()
+        previous_ids = self.preview_cell_ids
+        if previous_ids.size:
+            self.display_labels[previous_ids] = self.base_labels[previous_ids]
+        if ids.size:
+            self.display_labels[ids] = 256
+        self.preview_cell_ids = ids
+        self._mark_label_array_modified()
         self.render()
 
     def render(self) -> None:
@@ -121,21 +137,32 @@ class VedoWidget(QWidget):
             lut.SetTableValue(index, rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 1.0)
         lut.Build()
 
-    def _write_display_labels(self) -> None:
+    def _bind_label_array(self) -> None:
         if self.mesh is None:
             return
-        vtk_array = numpy_to_vtk(self.display_labels.astype(np.int32), deep=True)
-        vtk_array.SetName("Label")
-        self.mesh.dataset.GetCellData().SetScalars(vtk_array)
+        self._label_vtk_array = numpy_to_vtk(self.display_labels, deep=False)
+        self._label_vtk_array.SetName("Label")
+        self.mesh.dataset.GetCellData().SetScalars(self._label_vtk_array)
         self.mesh.dataset.GetCellData().SetActiveScalars("Label")
-        self.mesh.dataset.Modified()
-
         mapper = self.mesh.mapper
         mapper.SetScalarModeToUseCellData()
         mapper.SetColorModeToMapScalars()
         mapper.SetLookupTable(self.lookup_table)
         mapper.SetScalarRange(0.0, 256.0)
         mapper.ScalarVisibilityOn()
+
+    def _mark_label_array_modified(self) -> None:
+        if self.mesh is None:
+            return
+        if self._label_vtk_array is None:
+            self._bind_label_array()
+        if self._label_vtk_array is not None:
+            self._label_vtk_array.Modified()
+        self.mesh.dataset.GetCellData().SetActiveScalars("Label")
+        self.mesh.dataset.GetCellData().Modified()
+        self.mesh.dataset.Modified()
+        mapper = self.mesh.mapper
+        mapper.Modified()
         mapper.Update()
         self.mesh.modified()
 

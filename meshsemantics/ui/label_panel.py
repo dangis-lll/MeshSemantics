@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from meshlabeler.config.defaults import preset_label_rgb
+from meshsemantics.config.defaults import preset_label_rgb
 
 
 class ColorChip(QFrame):

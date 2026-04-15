@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import vedo
 
-from meshlabeler.core.label_engine import LabelEngine
+from meshsemantics.core.label_engine import LabelEngine
 
 
 class FileIO:

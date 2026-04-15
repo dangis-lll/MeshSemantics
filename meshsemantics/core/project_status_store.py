@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import csv
+from pathlib import Path
+
+
+STATUS_TABLE_NAME = ".meshsemantics_status.csv"
+
+
+def status_table_path(root: str | Path) -> Path:
+    return Path(root).expanduser() / STATUS_TABLE_NAME
+
+
+
+def load_project_statuses(root: str | Path) -> dict[str, str]:
+    for table_path in [status_table_path(root)]:
+        if not table_path.exists():
+            continue
+
+        statuses: dict[str, str] = {}
+        try:
+            with table_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    relative_path = str(row.get("relative_path", "")).strip()
+                    status = str(row.get("status", "")).strip()
+                    if not relative_path or not status:
+                        continue
+                    statuses[relative_path.replace("/", "\\")] = status
+        except Exception:
+            continue
+        return statuses
+    return {}
+
+
+def save_project_statuses(root: str | Path, status_by_relative_path: dict[str, str]) -> None:
+    table_path = status_table_path(root)
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    with table_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["relative_path", "status"])
+        for relative_path, status in sorted(status_by_relative_path.items()):
+            if not relative_path or not status:
+                continue
+            writer.writerow([relative_path.replace("\\", "/"), status])

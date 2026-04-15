@@ -6,10 +6,10 @@ from pathlib import Path
 
 
 def resolve_app_dir() -> Path:
-    env_path = os.environ.get("MESHLABELER_APP_DIR")
+    env_path = os.environ.get("MESHSEMANTICS_APP_DIR")
     if env_path:
         return Path(env_path)
-    return Path.home() / ".meshlabeler"
+    return Path.home() / ".meshsemantics"
 
 
 APP_DIR = resolve_app_dir()
@@ -67,7 +67,6 @@ DEFAULT_SETTINGS = {
     "window_size": [1560, 980],
     "last_open_dir": "",
     "last_file_by_folder": {},
-    "status_by_file": {},
     "min_label": 1,
     "max_label": 255,
 }

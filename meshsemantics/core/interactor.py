@@ -6,7 +6,7 @@ import numpy as np
 from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
 from vtkmodules.vtkRenderingCore import vtkCellPicker
 
-from meshlabeler.core.spline_selector import (
+from meshsemantics.core.spline_selector import (
     build_vtk_spline,
     select_cells_by_screen_polygon,
     select_cells_by_surface_loop,
@@ -96,10 +96,11 @@ class MeshInteractor(QObject):
         if selection.size:
             self.apply_requested.emit(selection)
 
-    def clear_preview(self) -> None:
+    def clear_preview(self, emit_preview: bool = True) -> None:
         self.state = InteractionState(mode="NORMAL")
         self.control_points_changed.emit([])
-        self._emit_selection_preview()
+        if emit_preview:
+            self._emit_selection_preview()
         self.mode_changed.emit(self.state.mode)
 
     def eventFilter(self, watched, event) -> bool:

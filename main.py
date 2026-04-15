@@ -1,4 +1,4 @@
-from meshlabeler.app import main
+from meshsemantics.app import main
 
 
 if __name__ == "__main__":

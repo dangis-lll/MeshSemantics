@@ -5,7 +5,7 @@ import sys
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
-from meshlabeler.ui.main_window import MainWindow
+from meshsemantics.ui.main_window import MainWindow
 
 
 def build_app() -> QApplication:
@@ -14,8 +14,8 @@ def build_app() -> QApplication:
         if attr is not None:
             QApplication.setAttribute(attr, True)
     app = QApplication(sys.argv)
-    app.setApplicationName("MeshLabeler")
-    app.setOrganizationName("MeshLabeler")
+    app.setApplicationName("MeshSemantics")
+    app.setOrganizationName("MeshSemantics")
     app.setStyle("Fusion")
     return app
 

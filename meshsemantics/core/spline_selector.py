@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 from vtkmodules.vtkCommonComputationalGeometry import vtkParametricSpline
-from vtkmodules.vtkCommonCore import vtkPoints
-from vtkmodules.vtkFiltersCore import vtkClipPolyData, vtkIdFilter
+from vtkmodules.vtkCommonCore import vtkPoints, reference
+from vtkmodules.vtkCommonDataModel import vtkGenericCell
+from vtkmodules.vtkFiltersCore import vtkClipPolyData, vtkIdFilter, vtkPolyDataConnectivityFilter
 from vtkmodules.vtkFiltersModeling import vtkSelectPolyData
 from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
+from vtkmodules.vtkCommonDataModel import vtkCellLocator
 from vtkmodules.vtkRenderingCore import vtkCellPicker
 from vtkmodules.util.numpy_support import vtk_to_numpy
 
@@ -52,6 +54,98 @@ def build_vtk_spline(
     if closed and sampled.shape[0] >= 1 and not np.allclose(sampled[0], sampled[-1]):
         sampled = np.vstack([sampled, sampled[0]])
     return sampled
+
+
+def _polyline_length(points: np.ndarray, closed: bool = False) -> float:
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    if pts.shape[0] < 2:
+        return 0.0
+    length = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+    if closed and pts.shape[0] >= 3 and not np.allclose(pts[0], pts[-1]):
+        length += float(np.linalg.norm(pts[0] - pts[-1]))
+    return length
+
+
+def estimate_contour_samples(
+    control_points_world: np.ndarray | list[tuple[float, float, float]],
+    closed: bool = False,
+    min_samples: int = 96,
+    target_spacing: float = 1.0,
+) -> int:
+    points = np.asarray(control_points_world, dtype=np.float64).reshape(-1, 3)
+    if points.shape[0] < 2:
+        return max(2, int(min_samples))
+    curve_length = _polyline_length(points, closed=closed)
+    if curve_length <= 1e-6:
+        return max(2, int(min_samples))
+    estimated = int(round(curve_length / max(target_spacing, 1e-6)))
+    return max(int(min_samples), estimated, points.shape[0] * 24)
+
+
+def snap_points_to_surface(polydata, points_world) -> np.ndarray:
+    points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
+    if points.shape[0] == 0:
+        return points
+
+    locator = vtkCellLocator()
+    locator.SetDataSet(polydata)
+    locator.BuildLocator()
+
+    generic_cell = vtkGenericCell()
+    cell_id = reference(0)
+    sub_id = reference(0)
+    dist2 = reference(0.0)
+
+    snapped = np.empty_like(points)
+    for index, point in enumerate(points):
+        closest = [0.0, 0.0, 0.0]
+        locator.FindClosestPoint(point, closest, generic_cell, cell_id, sub_id, dist2)
+        snapped[index] = closest
+    return snapped
+
+
+def build_surface_contour_line(
+    polydata,
+    control_points_world: np.ndarray | list[tuple[float, float, float]],
+    samples: int | None = None,
+    closed: bool = False,
+) -> np.ndarray:
+    if samples is None:
+        samples = estimate_contour_samples(control_points_world, closed=closed)
+    sampled = build_vtk_spline(control_points_world, samples=samples, closed=closed)
+    if sampled.shape[0] == 0:
+        return sampled
+
+    snapped = snap_points_to_surface(polydata, sampled)
+    if snapped.shape[0] <= 1:
+        return snapped
+
+    deltas = np.linalg.norm(np.diff(snapped, axis=0), axis=1)
+    keep = np.ones(snapped.shape[0], dtype=bool)
+    keep[1:] = deltas > 1e-6
+    snapped = snapped[keep]
+
+    if closed and snapped.shape[0] >= 3:
+        if not np.allclose(snapped[0], snapped[-1]):
+            snapped = np.vstack([snapped, snapped[0]])
+        elif snapped.shape[0] > 1 and np.allclose(snapped[-1], snapped[-2]):
+            snapped = snapped[:-1]
+            snapped = np.vstack([snapped, snapped[0]])
+    return snapped
+
+
+def build_surface_spline_loop(
+    polydata,
+    control_points_world: np.ndarray | list[tuple[float, float, float]],
+    samples: int = 200,
+    closed: bool = False,
+) -> np.ndarray:
+    return build_surface_contour_line(
+        polydata,
+        control_points_world,
+        samples=samples,
+        closed=closed,
+    )
 
 
 def smooth_closed_curve(points_2d: np.ndarray, samples: int = 200, closed: bool = True) -> np.ndarray:
@@ -187,16 +281,21 @@ def select_cells_by_surface_loop(polydata, loop_points_world) -> np.ndarray:
     selector.SetInputConnection(id_filter.GetOutputPort())
     selector.SetLoop(loop)
     selector.GenerateSelectionScalarsOn()
-    selector.SetSelectionModeToSmallestRegion()
+    selector.SetSelectionModeToLargestRegion()
     selector.Update()
 
     clip = vtkClipPolyData()
     clip.SetInputConnection(selector.GetOutputPort())
-    clip.InsideOutOn()
     clip.SetValue(0.0)
+    clip.GenerateClippedOutputOff()
     clip.Update()
 
-    output = clip.GetOutput()
+    connectivity = vtkPolyDataConnectivityFilter()
+    connectivity.SetInputConnection(clip.GetOutputPort())
+    connectivity.SetExtractionModeToLargestRegion()
+    connectivity.Update()
+
+    output = connectivity.GetOutput()
     cell_data = output.GetCellData()
     id_array = None
     for name in ["OriginalCellId", "vtkIdFilter_Ids"]:

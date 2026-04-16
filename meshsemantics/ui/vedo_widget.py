@@ -46,6 +46,7 @@ class VedoWidget(QWidget):
         self.cell_normals = np.zeros((0, 3), dtype=np.float64)
         self.control_points_actor = None
         self.control_line_actor = None
+        self.selected_control_actor = None
 
     def set_mesh(self, mesh, labels: np.ndarray, colormap: dict[str, tuple[int, int, int]]) -> None:
         self.plotter.clear()
@@ -107,10 +108,12 @@ class VedoWidget(QWidget):
         control_points = payload
         curve_points = payload
         closed = False
+        selected_index = -1
         if isinstance(payload, dict):
             control_points = payload.get("control_points", [])
             curve_points = payload.get("surface_curve_points", control_points)
             closed = bool(payload.get("closed", False))
+            selected_index = int(payload.get("selected_index", -1))
 
         points = np.asarray(control_points, dtype=np.float64).reshape(-1, 3)
         path_points = np.asarray(curve_points, dtype=np.float64).reshape(-1, 3)
@@ -119,6 +122,9 @@ class VedoWidget(QWidget):
             return
         self.control_points_actor = vedo.Points(points, r=12).c("#00e5ff")
         self.plotter.add(self.control_points_actor)
+        if 0 <= selected_index < len(points):
+            self.selected_control_actor = vedo.Points(points[[selected_index]], r=18).c("#ffcc33")
+            self.plotter.add(self.selected_control_actor)
         if len(path_points) >= 2:
             line_points = path_points
             if closed and len(path_points) >= 3 and not np.allclose(path_points[0], path_points[-1]):
@@ -180,8 +186,9 @@ class VedoWidget(QWidget):
             self.cell_normals = vtk_to_numpy(normals).astype(np.float64)
 
     def _remove_control_actors(self) -> None:
-        for actor in [self.control_points_actor, self.control_line_actor]:
+        for actor in [self.control_points_actor, self.control_line_actor, self.selected_control_actor]:
             if actor is not None:
                 self.plotter.remove(actor)
         self.control_points_actor = None
         self.control_line_actor = None
+        self.selected_control_actor = None

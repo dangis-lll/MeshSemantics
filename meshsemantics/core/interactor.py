@@ -7,8 +7,8 @@ from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
 from vtkmodules.vtkRenderingCore import vtkCellPicker
 
 from meshsemantics.core.spline_selector import (
-    build_vtk_spline,
-    select_cells_by_screen_polygon,
+    build_surface_contour_line,
+    project_world_to_display,
     select_cells_by_surface_loop,
 )
 
@@ -16,14 +16,15 @@ from meshsemantics.core.spline_selector import (
 @dataclass
 class InteractionState:
     mode: str = "NORMAL"
-    control_points_2d: list[tuple[float, float]] = field(default_factory=list)
     control_points_3d: list[tuple[float, float, float]] = field(default_factory=list)
+    curve_points_3d: list[tuple[float, float, float]] = field(default_factory=list)
     spline_preview_cell_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     manual_cell_ids: set[int] = field(default_factory=set)
     excluded_spline_cell_ids: set[int] = field(default_factory=set)
-    left_press_pos: tuple[float, float] | None = None
-    left_dragging: bool = False
-    vtk_drag_started: bool = False
+    drag_point_index: int = -1
+    hover_point_index: int = -1
+    hover_segment_index: int = -1
+    closed: bool = False
 
 
 class MeshInteractor(QObject):
@@ -32,6 +33,9 @@ class MeshInteractor(QObject):
     control_points_changed = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
     message = pyqtSignal(str)
+
+    POINT_HIT_RADIUS_PX = 14.0
+    SEGMENT_HIT_RADIUS_PX = 10.0
 
     def __init__(self, vedo_widget, settings: dict, parent=None) -> None:
         super().__init__(parent)
@@ -50,46 +54,44 @@ class MeshInteractor(QObject):
     def begin_spline(self) -> None:
         self.state.spline_preview_cell_ids = np.zeros(0, dtype=np.int32)
         self.state.excluded_spline_cell_ids.clear()
-        self.state.control_points_2d.clear()
         self.state.control_points_3d.clear()
+        self.state.curve_points_3d.clear()
+        self.state.drag_point_index = -1
+        self.state.hover_point_index = -1
+        self.state.hover_segment_index = -1
+        self.state.closed = False
         self.state.mode = "SPLINE"
         self.mode_changed.emit(self.state.mode)
-        self.control_points_changed.emit([])
+        self._emit_control_overlay()
         self._emit_selection_preview()
-        self.message.emit("Spline mode: left click to place control points, Enter to preview.")
+        self.message.emit(
+            "Spline mode: left click to add points, drag points to edit, click the first point to close, Enter to preview."
+        )
 
     def confirm_preview(self) -> None:
         if self.state.mode != "SPLINE":
             return
-        if len(self.state.control_points_2d) < 3:
+        if len(self.state.control_points_3d) < 3:
             self.message.emit("At least 3 control points are required.")
             return
-        loop_points = self._build_surface_curve_points(closed=True)
+        loop_points = self._build_contour_line_points(closed=True)
+        if len(loop_points) < 3:
+            self.message.emit("The contour line is invalid. Adjust the control points and try again.")
+            return
         selected = select_cells_by_surface_loop(self.vedo_widget.mesh.dataset, loop_points)
-        if selected.size == 0:
-            polygon = np.asarray(self.state.control_points_2d, dtype=np.float64)
-            selected = select_cells_by_screen_polygon(
-                self.vedo_widget.renderer,
-                self.vedo_widget.cell_centers,
-                self.vedo_widget.cell_normals,
-                polygon,
-                exclude_backfaces=bool(self.settings.get("exclude_backfaces", True)),
-                visible_only=True,
-            )
         self.state.spline_preview_cell_ids = selected
+        self.state.curve_points_3d = [tuple(point) for point in loop_points]
+        self.state.closed = True
         self.state.mode = "CONFIRM"
-        self.control_points_changed.emit(
-            {
-                "control_points": self.state.control_points_3d.copy(),
-                "surface_curve_points": loop_points,
-                "closed": True,
-            }
-        )
+        self._emit_control_overlay()
         self._emit_selection_preview()
         self.mode_changed.emit(self.state.mode)
-        self.message.emit(
-            f"Previewing {self.current_selection().size} cells. Press E to apply or C to cancel."
-        )
+        if selected.size == 0:
+            self.message.emit("Surface-loop clipping found no cells. Adjust the contour and try again.")
+        else:
+            self.message.emit(
+                f"Previewing {self.current_selection().size} cells. Press E to apply or C to cancel."
+            )
 
     def apply_preview(self) -> None:
         selection = self.current_selection()
@@ -98,7 +100,7 @@ class MeshInteractor(QObject):
 
     def clear_preview(self, emit_preview: bool = True) -> None:
         self.state = InteractionState(mode="NORMAL")
-        self.control_points_changed.emit([])
+        self._emit_control_overlay()
         if emit_preview:
             self._emit_selection_preview()
         self.mode_changed.emit(self.state.mode)
@@ -111,48 +113,35 @@ class MeshInteractor(QObject):
             self._suppress_right_drag = True
             return True
 
+        if event.type() == QEvent.Type.KeyPress and self.state.mode in {"SPLINE", "CONFIRM"}:
+            key = event.key()
+            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if self._delete_highlighted_control_point():
+                    return True
+
         if event.type() == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.RightButton:
                 self._suppress_right_drag = True
                 self._toggle_pick(*self._to_vtk_display(event.position().x(), event.position().y()))
                 return True
             if event.button() == Qt.MouseButton.LeftButton and self.state.mode == "SPLINE":
-                self.state.left_press_pos = (float(event.position().x()), float(event.position().y()))
-                self.state.left_dragging = False
-                self.state.vtk_drag_started = False
-                return True
+                return self._handle_spline_left_press(float(event.position().x()), float(event.position().y()))
 
         if event.type() == QEvent.Type.MouseMove:
             if self._suppress_right_drag:
                 return True
-            if self.state.mode == "SPLINE" and self.state.left_press_pos is not None:
-                dx = float(event.position().x()) - self.state.left_press_pos[0]
-                dy = float(event.position().y()) - self.state.left_press_pos[1]
-                if (dx * dx + dy * dy) ** 0.5 > 4.0:
-                    self.state.left_dragging = True
-                    if not self.state.vtk_drag_started:
-                        self._forward_vtk_left_press(*self.state.left_press_pos)
-                        self.state.vtk_drag_started = True
-                    self._forward_vtk_mouse_move(float(event.position().x()), float(event.position().y()))
+            if self.state.mode == "SPLINE":
+                self._handle_spline_mouse_move(float(event.position().x()), float(event.position().y()))
                 return True
 
         if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
             self._suppress_right_drag = False
             return True
+
         if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
             if self.state.mode == "SPLINE":
-                if self.state.vtk_drag_started:
-                    self._forward_vtk_left_release(float(event.position().x()), float(event.position().y()))
-                elif not self.state.left_dragging:
-                    self._add_control_point(*self._to_vtk_display(event.position().x(), event.position().y()))
-                self.state.left_press_pos = None
-                self.state.left_dragging = False
-                self.state.vtk_drag_started = False
+                self._handle_spline_left_release()
                 return True
-            self.state.left_press_pos = None
-            self.state.left_dragging = False
-            self.state.vtk_drag_started = False
-            return False
 
         return super().eventFilter(watched, event)
 
@@ -168,20 +157,150 @@ class MeshInteractor(QObject):
             return manual.copy()
         return np.unique(np.concatenate([manual, spline])).astype(np.int32)
 
-    def _add_control_point(self, x: float, y: float) -> None:
-        self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
-        if self.picker.GetCellId() < 0:
+    def _handle_spline_left_press(self, x: float, y: float) -> bool:
+        display = self._to_vtk_display(x, y)
+        point_index, point_dist = self._find_nearest_control_point(display)
+        if point_index == 0 and len(self.state.control_points_3d) >= 3 and point_dist <= self.POINT_HIT_RADIUS_PX:
+            self.state.closed = True
+            self.state.curve_points_3d = self._build_contour_line_points(closed=True)
+            self.state.drag_point_index = -1
+            self._emit_control_overlay()
+            self.message.emit("Contour closed. Press Enter to preview the selection.")
+            return True
+
+        if point_index >= 0 and point_dist <= self.POINT_HIT_RADIUS_PX:
+            self.state.drag_point_index = point_index
+            self.state.hover_point_index = point_index
+            self._update_control_point_from_display(point_index, display)
+            return True
+
+        segment_index, segment_dist = self._find_nearest_curve_segment(display)
+        if segment_index >= 0 and segment_dist <= self.SEGMENT_HIT_RADIUS_PX:
+            world_point = self._pick_surface_point(*display)
+            if world_point is None:
+                return True
+            insert_index = min(segment_index + 1, len(self.state.control_points_3d))
+            self.state.control_points_3d.insert(insert_index, world_point)
+            self.state.drag_point_index = insert_index
+            self.state.hover_point_index = insert_index
+            self._update_curve_preview()
+            self.message.emit(f"Inserted control point {insert_index + 1}.")
+            return True
+
+        world_point = self._pick_surface_point(*display)
+        if world_point is None:
+            return True
+        self.state.control_points_3d.append(world_point)
+        self.state.drag_point_index = len(self.state.control_points_3d) - 1
+        self.state.hover_point_index = self.state.drag_point_index
+        self.state.closed = False
+        self._update_curve_preview()
+        self.message.emit(f"Added control point {len(self.state.control_points_3d)}.")
+        return True
+
+    def _handle_spline_mouse_move(self, x: float, y: float) -> None:
+        display = self._to_vtk_display(x, y)
+        if self.state.drag_point_index >= 0:
+            self._update_control_point_from_display(self.state.drag_point_index, display)
             return
-        self.state.control_points_2d.append((float(x), float(y)))
-        self.state.control_points_3d.append(tuple(self.picker.GetPickPosition()))
+
+        point_index, point_dist = self._find_nearest_control_point(display)
+        segment_index, segment_dist = self._find_nearest_curve_segment(display)
+        self.state.hover_point_index = point_index if point_dist <= self.POINT_HIT_RADIUS_PX else -1
+        self.state.hover_segment_index = segment_index if segment_dist <= self.SEGMENT_HIT_RADIUS_PX else -1
+
+    def _handle_spline_left_release(self) -> None:
+        self.state.drag_point_index = -1
+
+    def _update_control_point_from_display(self, index: int, display: tuple[float, float]) -> None:
+        world_point = self._pick_surface_point(*display)
+        if world_point is None or index < 0 or index >= len(self.state.control_points_3d):
+            return
+        self.state.control_points_3d[index] = world_point
+        self._update_curve_preview()
+
+    def _update_curve_preview(self) -> None:
+        self.state.curve_points_3d = self._build_contour_line_points(closed=self.state.closed)
+        self._emit_control_overlay()
+
+    def _emit_control_overlay(self) -> None:
         self.control_points_changed.emit(
             {
                 "control_points": self.state.control_points_3d.copy(),
-                "surface_curve_points": self._build_surface_curve_points(closed=False),
-                "closed": False,
+                "surface_curve_points": self.state.curve_points_3d.copy(),
+                "closed": bool(self.state.closed),
+                "selected_index": int(self.state.hover_point_index),
             }
         )
-        self.message.emit(f"Added control point {len(self.state.control_points_2d)}.")
+
+    def _delete_highlighted_control_point(self) -> bool:
+        index = self.state.hover_point_index
+        if index < 0 and self.state.control_points_3d:
+            index = len(self.state.control_points_3d) - 1
+        if index < 0 or index >= len(self.state.control_points_3d):
+            return False
+        del self.state.control_points_3d[index]
+        self.state.drag_point_index = -1
+        self.state.hover_point_index = -1
+        if len(self.state.control_points_3d) < 3:
+            self.state.closed = False
+        self._update_curve_preview()
+        self.message.emit(f"Removed control point {index + 1}.")
+        return True
+
+    def _find_nearest_control_point(self, display: tuple[float, float]) -> tuple[int, float]:
+        if not self.state.control_points_3d:
+            return -1, float("inf")
+        projected = self._project_curve_to_display(self.state.control_points_3d)
+        if projected.size == 0:
+            return -1, float("inf")
+        target = np.asarray(display, dtype=np.float64)
+        dists = np.linalg.norm(projected - target[None, :], axis=1)
+        index = int(np.argmin(dists))
+        return index, float(dists[index])
+
+    def _find_nearest_curve_segment(self, display: tuple[float, float]) -> tuple[int, float]:
+        curve = np.asarray(self.state.curve_points_3d, dtype=np.float64).reshape(-1, 3)
+        if curve.shape[0] < 2:
+            return -1, float("inf")
+        display_curve = self._project_curve_to_display(curve)
+        if display_curve.shape[0] < 2:
+            return -1, float("inf")
+        segment_count = display_curve.shape[0] - 1
+        if self.state.closed and curve.shape[0] >= 3:
+            segment_count = display_curve.shape[0] - 1
+        point = np.asarray(display, dtype=np.float64)
+        best_index = -1
+        best_dist = float("inf")
+        for idx in range(segment_count):
+            dist = self._distance_to_segment(point, display_curve[idx], display_curve[idx + 1])
+            if dist < best_dist:
+                best_dist = dist
+                best_index = idx
+        return best_index, best_dist
+
+    def _project_curve_to_display(
+        self, world_points: list[tuple[float, float, float]] | np.ndarray
+    ) -> np.ndarray:
+        points = np.asarray(world_points, dtype=np.float64).reshape(-1, 3)
+        if points.size == 0:
+            return np.zeros((0, 2), dtype=np.float64)
+        return project_world_to_display(self.vedo_widget.renderer, points)
+
+    def _distance_to_segment(self, point: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+        if denom <= 1e-12:
+            return float(np.linalg.norm(point - a))
+        t = float(np.clip(np.dot(point - a, ab) / denom, 0.0, 1.0))
+        closest = a + t * ab
+        return float(np.linalg.norm(point - closest))
+
+    def _pick_surface_point(self, x: float, y: float) -> tuple[float, float, float] | None:
+        self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
+        if self.picker.GetCellId() < 0:
+            return None
+        return tuple(float(v) for v in self.picker.GetPickPosition())
 
     def _toggle_pick(self, x: float, y: float) -> None:
         self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
@@ -218,37 +337,13 @@ class MeshInteractor(QObject):
         vtk_y = min(max(vtk_y, 0.0), height - 1.0)
         return vtk_x, vtk_y
 
-    def _build_surface_curve_points(self, closed: bool = False) -> list[tuple[float, float, float]]:
+    def _build_contour_line_points(self, closed: bool = False) -> list[tuple[float, float, float]]:
         world_points = np.asarray(self.state.control_points_3d, dtype=np.float64).reshape(-1, 3)
         if world_points.shape[0] < 2:
             return [tuple(point) for point in world_points]
-        curve_points = build_vtk_spline(
+        curve_points = build_surface_contour_line(
+            self.vedo_widget.mesh.dataset,
             world_points,
-            samples=max(96, world_points.shape[0] * 24),
             closed=closed,
         )
         return [tuple(point) for point in curve_points]
-
-    def _forward_vtk_left_press(self, x: float, y: float) -> None:
-        self._set_vtk_event_position(x, y)
-        self.vedo_widget.interactor.LeftButtonPressEvent()
-
-    def _forward_vtk_mouse_move(self, x: float, y: float) -> None:
-        self._set_vtk_event_position(x, y)
-        self.vedo_widget.interactor.MouseMoveEvent()
-
-    def _forward_vtk_left_release(self, x: float, y: float) -> None:
-        self._set_vtk_event_position(x, y)
-        self.vedo_widget.interactor.LeftButtonReleaseEvent()
-
-    def _set_vtk_event_position(self, x: float, y: float) -> None:
-        vtk_x, vtk_y = self._to_vtk_display(x, y)
-        self.vedo_widget.interactor.SetEventInformationFlipY(
-            int(round(vtk_x)),
-            int(round(y)),
-            0,
-            0,
-            "0",
-            0,
-            None,
-        )

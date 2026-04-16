@@ -1,5 +1,7 @@
 # MeshSemantics
 
+![image](doc/demo.png)
+
 [English README](./README.md)
 
 MeshSemantics 是一个用于三角网格语义标注的桌面软件。

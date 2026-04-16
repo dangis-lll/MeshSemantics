@@ -1,5 +1,7 @@
 # MeshSemantics
 
+![image](doc/demo.png)
+
 [中文说明](./README_zh.md)
 
 MeshSemantics is a desktop tool for interactive semantic labeling of triangle meshes.

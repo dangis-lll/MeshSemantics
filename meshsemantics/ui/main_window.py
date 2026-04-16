@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import sys
 
@@ -12,8 +12,11 @@ from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSigna
 from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
+    QCheckBox,
+    QPushButton,
     QSizePolicy,
     QStatusBar,
     QToolBar,
@@ -32,7 +35,7 @@ from meshsemantics.core.project_dataset import (
     STATUS_UNLABELED,
     build_relative_status_index,
     build_work_path_status_index,
-    compute_next_pending_path,
+    compute_next_open_path,
     normalize_path,
     scan_project_dataset,
 )
@@ -150,10 +153,69 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.vedo_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.label_panel)
+        self._build_floating_action_bar()
 
         status = QStatusBar()
         status.showMessage("Ready")
         self.setStatusBar(status)
+
+    def _build_floating_action_bar(self) -> None:
+        self.file_panel.next_model_button.hide()
+        self.label_panel.quick_save_button.hide()
+        self.label_panel.complete_checkbox.hide()
+
+        self.floating_next_todo_button = QPushButton("Next To Do", self.vedo_widget)
+        self.floating_next_todo_button.clicked.connect(self.file_panel._open_next_model)
+
+        self.floating_quick_save_button = QPushButton("Quick Save", self.vedo_widget)
+        self.floating_quick_save_button.clicked.connect(self.quick_save_current)
+
+        self.floating_complete_checkbox = QCheckBox("Completed", self.vedo_widget)
+        self.floating_complete_checkbox.setObjectName("floating-completion-toggle")
+        self.floating_complete_checkbox.setStyleSheet(
+            self.label_panel._completion_checkbox_qss().replace("completion-toggle", "floating-completion-toggle")
+        )
+        self.floating_complete_checkbox.clicked.connect(self.toggle_task_completed)
+        self.vedo_widget.installEventFilter(self)
+        self._position_floating_action_bar()
+
+    def _position_floating_action_bar(self) -> None:
+        if not hasattr(self, "floating_next_todo_button"):
+            return
+        margin = 20
+        spacing = 8
+
+        controls = [
+            self.floating_next_todo_button,
+            self.floating_quick_save_button,
+            self.floating_complete_checkbox,
+        ]
+        widths = []
+        height = 0
+        for control in controls:
+            hint = control.sizeHint()
+            control.resize(hint)
+            widths.append(hint.width())
+            height = max(height, hint.height())
+
+        total_width = sum(widths) + spacing * (len(controls) - 1)
+        x = max(margin, self.vedo_widget.width() - total_width - margin)
+        y = max(margin, self.vedo_widget.height() - height - margin)
+
+        cursor_x = x
+        for control, width in zip(controls, widths):
+            control.move(cursor_x, y)
+            control.raise_()
+            cursor_x += width + spacing
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_floating_action_bar()
+
+    def eventFilter(self, watched: QObject, event) -> bool:
+        if watched is self.vedo_widget and event.type() == event.Type.Resize:
+            self._position_floating_action_bar()
+        return super().eventFilter(watched, event)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
@@ -165,8 +227,14 @@ class MainWindow(QMainWindow):
         open_file.triggered.connect(self.open_file_dialog)
         open_dir = QAction("Open Folder", self)
         open_dir.triggered.connect(self.open_folder_dialog)
+        import_json = QAction("Import Segment", self)
+        import_json.triggered.connect(self.import_labels_json_dialog)
         save_action = QAction("Save As", self)
+        save_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         save_action.triggered.connect(self.save_current)
+        clear_selection_action = QAction("Clear Selection", self)
+        clear_selection_action.setShortcut(QKeySequence("Esc"))
+        clear_selection_action.triggered.connect(self.clear_current_model_selection)
         undo_action = QAction(self._create_arrow_icon(direction="left"), "", self)
         undo_action.setToolTip("Undo")
         undo_action.triggered.connect(self.undo)
@@ -174,7 +242,12 @@ class MainWindow(QMainWindow):
         redo_action.setToolTip("Redo")
         redo_action.triggered.connect(self.redo)
 
-        for action in [open_file, open_dir, save_action]:
+        self.import_json_action = import_json
+        self.clear_selection_action = clear_selection_action
+        self.import_json_action.setEnabled(False)
+        self.clear_selection_action.setEnabled(False)
+
+        for action in [open_file, open_dir, import_json, save_action, clear_selection_action]:
             toolbar.addAction(action)
 
         spacer = QWidget(self)
@@ -191,7 +264,7 @@ class MainWindow(QMainWindow):
 
     def _bind_signals(self) -> None:
         self.file_panel.open_requested.connect(self.load_mesh)
-        self.file_panel.next_todo_requested.connect(self.open_next_pending)
+        self.file_panel.next_model_requested.connect(self.load_mesh)
 
         self.label_panel.colormap_changed.connect(self._on_colormap_changed)
         self.label_panel.remap_requested.connect(self._remap_labels)
@@ -208,6 +281,7 @@ class MainWindow(QMainWindow):
         self.interactor.message.connect(self.statusBar().showMessage)
 
     def _bind_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Ctrl+S"), self, activated=self.quick_save_current)
         QShortcut(QKeySequence("S"), self, activated=self.interactor.begin_spline)
         QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.interactor.confirm_preview)
         QShortcut(QKeySequence(Qt.Key.Key_Enter), self, activated=self.interactor.confirm_preview)
@@ -233,6 +307,21 @@ class MainWindow(QMainWindow):
             if self.vedo_widget.mesh is not None:
                 self._clear_loaded_mesh()
             self.open_project(folder, auto_load=False)
+
+    def import_labels_json_dialog(self) -> None:
+        if not self._can_import_json():
+            return
+        default_path = Path(self.current_path).with_suffix(".json")
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Label JSON",
+            str(default_path if default_path.exists() else self.last_open_dir),
+            "JSON (*.json)",
+        )
+        if not file_path:
+            return
+        self._set_last_open_dir(Path(file_path).parent)
+        self._import_labels_json(file_path)
 
     def open_project(self, folder: str | Path, preferred_path: str | Path | None = None, auto_load: bool = True) -> None:
         normalized_folder = normalize_path(folder)
@@ -279,6 +368,7 @@ class MainWindow(QMainWindow):
         self.file_panel.set_busy(False)
         self.file_panel.set_project(dataset)
         self._refresh_completion_action()
+        self._sync_floating_action_buttons()
 
         if dataset is None or not dataset.entries:
             self.statusBar().showMessage("No meshes found in folder")
@@ -300,18 +390,14 @@ class MainWindow(QMainWindow):
             return
         if scanned_files <= 0:
             self.file_panel.set_busy(True, "Scanning folder...")
+            self._sync_floating_action_buttons()
             return
         message = f"Scanning folder... {scanned_files} meshes"
         if latest_path:
             message = f"{message} | {latest_path}"
         self.file_panel.set_busy(True, message)
+        self._sync_floating_action_buttons()
         self.statusBar().showMessage(message)
-
-    def open_next_pending(self) -> None:
-        if self.project_dataset is None or not self.project_dataset.next_pending_path:
-            self.statusBar().showMessage("No pending meshes in the current folder")
-            return
-        self.load_mesh(self.project_dataset.next_pending_path)
 
     def toggle_task_completed(self) -> None:
         if self.current_path is None:
@@ -324,11 +410,35 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Task reopened and set to in progress")
 
+    def clear_current_model_selection(self) -> None:
+        if self.current_path is None and self.vedo_widget.mesh is None:
+            self.statusBar().showMessage("No model is currently selected")
+            return
+        if not self._confirm_save_if_dirty():
+            return
+        self._clear_loaded_mesh()
+        if self.project_dataset is not None:
+            self.project_dataset = ProjectDataset(
+                root_path=self.project_dataset.root_path,
+                entries=self.project_dataset.entries,
+                current_path=None,
+                next_open_path=self.project_dataset.next_open_path,
+                suggested_path=None,
+            )
+        self.file_panel.set_current_path(None)
+        self._sync_floating_action_buttons()
+        self.statusBar().showMessage("Cleared current model selection")
+
     @pyqtSlot(str)
     def load_mesh(self, file_path: str) -> None:
         normalized_path = normalize_path(file_path)
         if normalized_path is None:
             return
+        resolved_path = self._resolve_open_target_path(normalized_path)
+        if resolved_path is None:
+            self.file_panel.set_current_path(self.current_path)
+            return
+        normalized_path = resolved_path
         if not self._prepare_for_model_switch(normalized_path):
             self.file_panel.set_current_path(self.current_path)
             return
@@ -343,16 +453,18 @@ class MainWindow(QMainWindow):
                 root_path=self.project_dataset.root_path,
                 entries=self.project_dataset.entries,
                 current_path=normalized_path,
-                next_pending_path=self.project_dataset.next_pending_path,
+                next_open_path=self.project_dataset.next_open_path,
                 suggested_path=normalized_path,
             )
             self.file_panel.set_current_path(normalized_path)
 
         self.file_panel.set_busy(True, "Loading mesh...")
+        self._sync_floating_action_buttons()
         try:
             mesh, labels = FileIO.load_mesh(normalized_path)
         except Exception as exc:
             self.file_panel.set_busy(False)
+            self._sync_floating_action_buttons()
             self._record_status(normalized_path, STATUS_FAILED)
             self._project_status_by_work_path[normalized_path] = STATUS_FAILED
             self.project_dataset = previous_project
@@ -365,14 +477,31 @@ class MainWindow(QMainWindow):
         self._consume_loaded_mesh(normalized_path, mesh, labels)
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        if not event.mimeData().hasUrls():
+            return
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            suffix = Path(path).suffix.lower()
+            if suffix in FileIO.SUPPORTED_SUFFIXES:
+                event.acceptProposedAction()
+                return
+            if suffix == ".json" and self._can_import_json():
+                event.acceptProposedAction()
+                return
 
     def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if Path(path).suffix.lower() in FileIO.SUPPORTED_SUFFIXES:
+            suffix = Path(path).suffix.lower()
+            if suffix in FileIO.SUPPORTED_SUFFIXES:
                 self.open_project(Path(path).parent, preferred_path=path, auto_load=True)
+                break
+            if suffix == ".json":
+                if not self._can_import_json():
+                    QMessageBox.information(self, "Import JSON", "请先打开一个模型，再导入 JSON 标注文件。")
+                    break
+                self._set_last_open_dir(Path(path).parent)
+                self._import_labels_json(path)
                 break
 
     def closeEvent(self, event) -> None:
@@ -465,6 +594,42 @@ class MainWindow(QMainWindow):
         FileIO.save_labels_json(target, self.label_engine.label_array)
         self.statusBar().showMessage(f"Saved JSON to {target}")
 
+    def _import_labels_json(self, file_path: str | Path) -> bool:
+        if self.vedo_widget.mesh is None:
+            return False
+        before_labels, before_ui, dirty_before = self._capture_history_state()
+        try:
+            labels = FileIO.load_labels_json(file_path, expected_cell_count=self.label_engine.size)
+        except Exception as exc:
+            reason = self._friendly_json_import_error(exc)
+            QMessageBox.critical(
+                self,
+                "Import Failed",
+                reason,
+            )
+            return False
+
+        self.interactor.clear_preview(emit_preview=False)
+        self.label_engine.reset(labels)
+        self.label_panel.ensure_labels(self.label_engine.unique_labels())
+        self.is_dirty = True
+        self._push_history(before_labels, before_ui, dirty_before)
+        self._update_mesh_view()
+        self._update_current_status_after_edit()
+        self.statusBar().showMessage(f"Imported labels from {Path(file_path).name}")
+        return True
+
+    def _can_import_json(self) -> bool:
+        return self.vedo_widget.mesh is not None and self.current_path is not None
+
+    def _friendly_json_import_error(self, error: Exception) -> str:
+        code = str(error).strip()
+        if code == "cell_count_mismatch":
+            return "导入的标注文件和当前打开的模型不匹配，请确认它们是否为同一个模型。"
+        if code in {"missing_labels", "invalid_count", "invalid_json"}:
+            return "这个标注文件格式不正确，无法导入。"
+        return "导入失败，请检查标注文件的格式。"
+
     def undo(self) -> None:
         if not self.undo_history:
             return
@@ -546,6 +711,7 @@ class MainWindow(QMainWindow):
 
         status = self._status_for_loaded_file(file_path)
         self._set_current_status(status, persist_only=True)
+        self._sync_floating_action_buttons()
         self.statusBar().showMessage(f"Loaded {Path(file_path).name}")
 
     def _prepare_for_model_switch(self, next_path: str) -> bool:
@@ -609,19 +775,26 @@ class MainWindow(QMainWindow):
         if normalized_target is None:
             return False
 
+        previous_path = normalize_path(self.current_path)
+        status = self._current_entry_status()
+        if status == STATUS_FAILED or status is None:
+            status = self._base_status_for_work(normalized_target)
+
         self.current_path = normalized_target
         self.vedo_widget.mesh.filename = normalized_target
         self.is_dirty = False
-        status = self._current_entry_status()
-        if status == STATUS_FAILED:
-            status = self._base_status_for_work(normalized_target)
+        self._replace_current_project_entry(previous_path, normalized_target, status)
+        if previous_path and previous_path != normalized_target:
+            self._project_status_by_work_path.pop(previous_path, None)
+            previous_relative_key = self._relative_status_key(previous_path)
+            next_relative_key = self._relative_status_key(normalized_target)
+            if previous_relative_key and previous_relative_key != next_relative_key:
+                self._project_status_by_relative_path.pop(previous_relative_key, None)
         self._record_status(normalized_target, status)
         self._project_status_by_work_path[normalized_target] = status
         project_root = self._project_root_or_parent(normalized_target)
         self._remember_last_file(project_root, normalized_target)
-
-        rescan_root = self._rescan_root_for_target(target_path)
-        self.open_project(rescan_root, preferred_path=normalized_target, auto_load=False)
+        self._refresh_completion_action()
         self.statusBar().showMessage(f"Saved VTP to {normalized_target}")
         return True
 
@@ -679,6 +852,7 @@ class MainWindow(QMainWindow):
         self._clear_history()
         self._refresh_stats(0)
         self._refresh_completion_action()
+        self.file_panel.set_current_path(None)
 
     def _base_status_for_work(self, file_path: str | Path) -> str:
         path = Path(str(file_path))
@@ -761,19 +935,31 @@ class MainWindow(QMainWindow):
         self._record_status(self.current_path, status)
         self._project_status_by_work_path[self.current_path] = status
         if self.project_dataset is not None:
-            next_pending_path = compute_next_pending_path(
-                self.project_dataset,
+            entries = list(self.project_dataset.entries)
+            for index, entry in enumerate(entries):
+                if normalize_path(entry.work_path) != self.current_path and normalize_path(entry.source_path) != self.current_path:
+                    continue
+                entries[index] = replace(entry, status=status)
+                break
+            next_open_path = compute_next_open_path(
+                ProjectDataset(
+                    root_path=self.project_dataset.root_path,
+                    entries=tuple(entries),
+                    current_path=self.current_path,
+                    next_open_path=self.project_dataset.next_open_path,
+                    suggested_path=self.project_dataset.suggested_path,
+                ),
                 self._project_status_by_work_path,
                 self.current_path,
             )
             self.project_dataset = ProjectDataset(
                 root_path=self.project_dataset.root_path,
-                entries=self.project_dataset.entries,
+                entries=tuple(entries),
                 current_path=self.current_path,
-                next_pending_path=next_pending_path,
+                next_open_path=next_open_path,
                 suggested_path=self.project_dataset.suggested_path,
             )
-            self.file_panel.update_status(self.current_path, status, next_pending_path)
+            self.file_panel.update_status(self.current_path, status)
             self.file_panel.set_current_path(self.current_path)
         self._refresh_completion_action()
         if persist_only:
@@ -788,6 +974,219 @@ class MainWindow(QMainWindow):
         enabled = self.current_path is not None
         self.label_panel.complete_checkbox.setEnabled(enabled)
         self.label_panel.quick_save_button.setEnabled(enabled)
+        if hasattr(self, "floating_complete_checkbox"):
+            self.floating_complete_checkbox.blockSignals(True)
+            self.floating_complete_checkbox.setChecked(is_completed)
+            self.floating_complete_checkbox.blockSignals(False)
+            self.floating_complete_checkbox.setEnabled(enabled)
+        if hasattr(self, "import_json_action"):
+            self.import_json_action.setEnabled(self._can_import_json())
+        if hasattr(self, "clear_selection_action"):
+            self.clear_selection_action.setEnabled(self.current_path is not None or self.vedo_widget.mesh is not None)
+        self._sync_floating_action_buttons()
+
+    def _sync_floating_action_buttons(self) -> None:
+        if not hasattr(self, "floating_next_todo_button"):
+            return
+        enabled = self.current_path is not None
+        busy = self.file_panel.progress.isVisible()
+        has_next = self.file_panel.model.next_incomplete_path_after(self.file_panel.selected_path()) is not None
+        self.floating_quick_save_button.setEnabled(enabled and not busy)
+        self.floating_complete_checkbox.setEnabled(enabled and not busy)
+        self.floating_next_todo_button.setEnabled(not busy and has_next)
+        self._position_floating_action_bar()
+
+    def _replace_current_project_entry(self, previous_path: str | None, next_path: str, status: str) -> None:
+        if self.project_dataset is None or previous_path is None:
+            return
+
+        entries = [
+            replace(entry, status=self._project_status_by_work_path.get(entry.work_path, entry.status))
+            for entry in self.project_dataset.entries
+        ]
+        updated = False
+        for index, entry in enumerate(entries):
+            if normalize_path(entry.work_path) != previous_path and normalize_path(entry.source_path) != previous_path:
+                continue
+            entries[index] = replace(
+                entry,
+                display_path=self._display_path_for_project_entry(next_path),
+                work_path=next_path,
+                status=status,
+            )
+            updated = True
+            break
+
+        if not updated:
+            return
+
+        temp_dataset = ProjectDataset(
+            root_path=self.project_dataset.root_path,
+            entries=tuple(entries),
+            current_path=next_path,
+            next_open_path=self.project_dataset.next_open_path,
+            suggested_path=next_path,
+        )
+        next_open_path = compute_next_open_path(
+            temp_dataset,
+            {**self._project_status_by_work_path, next_path: status},
+            next_path,
+        )
+        self.project_dataset = ProjectDataset(
+            root_path=self.project_dataset.root_path,
+            entries=tuple(entries),
+            current_path=next_path,
+            next_open_path=next_open_path,
+            suggested_path=next_path,
+        )
+        self.file_panel.set_project(self.project_dataset)
+        self.file_panel.set_current_path(next_path)
+
+    def _display_path_for_project_entry(self, path: str | Path) -> str:
+        normalized = normalize_path(path)
+        if normalized is None:
+            return Path(path).name
+        target = Path(normalized)
+        if self.project_dataset is not None:
+            root = Path(self.project_dataset.root_path)
+            try:
+                return str(target.relative_to(root)).replace("\\", "/")
+            except Exception:
+                pass
+        return target.name
+
+    def _resolve_open_target_path(self, requested_path: str) -> str | None:
+        entry = self._project_entry_for_path(requested_path)
+        if entry is None:
+            return requested_path if Path(requested_path).exists() else None
+
+        work_exists = Path(entry.work_path).exists()
+        source_exists = Path(entry.source_path).exists()
+        requested_is_work = normalize_path(entry.work_path) == requested_path
+        requested_is_source = normalize_path(entry.source_path) == requested_path
+
+        if requested_is_source:
+            if source_exists:
+                return entry.source_path
+            if work_exists:
+                return entry.work_path
+            return self._handle_deleted_project_entry(entry)
+
+        if work_exists:
+            return entry.work_path
+        if source_exists:
+            self._switch_project_entry_to_source(entry)
+            self.statusBar().showMessage("标注文件已被删除，已改为打开原始 STL 文件")
+            return entry.source_path
+        return self._handle_deleted_project_entry(entry)
+
+    def _project_entry_for_path(self, path: str) -> object | None:
+        if self.project_dataset is None:
+            return None
+        normalized = normalize_path(path)
+        if normalized is None:
+            return None
+        for entry in self.project_dataset.entries:
+            if normalize_path(entry.work_path) == normalized or normalize_path(entry.source_path) == normalized:
+                return entry
+        return None
+
+    def _switch_project_entry_to_source(self, entry) -> None:
+        if self.project_dataset is None:
+            return
+        entries = list(self.project_dataset.entries)
+        source_path = normalize_path(entry.source_path) or entry.source_path
+        for index, candidate in enumerate(entries):
+            if candidate != entry:
+                continue
+            entries[index] = replace(
+                candidate,
+                display_path=self._display_path_for_project_entry(source_path),
+                work_path=source_path,
+            )
+            break
+        self.project_dataset = ProjectDataset(
+            root_path=self.project_dataset.root_path,
+            entries=tuple(entries),
+            current_path=self.current_path,
+            next_open_path=compute_next_open_path(
+                ProjectDataset(
+                    root_path=self.project_dataset.root_path,
+                    entries=tuple(entries),
+                    current_path=self.current_path,
+                    next_open_path=self.project_dataset.next_open_path,
+                    suggested_path=self.project_dataset.suggested_path,
+                ),
+                self._project_status_by_work_path,
+                self.current_path,
+            ),
+            suggested_path=self.project_dataset.suggested_path,
+        )
+        previous_work = normalize_path(entry.work_path)
+        status = self._project_status_by_work_path.get(previous_work or "", entry.status)
+        if previous_work and previous_work != source_path:
+            self._project_status_by_work_path.pop(previous_work, None)
+        self._project_status_by_work_path[source_path] = status
+        self.file_panel.set_project(self.project_dataset)
+        self.file_panel.set_current_path(self.current_path)
+
+    def _handle_deleted_project_entry(self, entry) -> str | None:
+        message = (
+            "这个文件在本地已经被删除了。\n\n"
+            "要继续保留在软件列表里吗？"
+        )
+        reply = QMessageBox.question(
+            self,
+            "文件已删除",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            return None
+        self._remove_project_entry(entry)
+        self.statusBar().showMessage("已从软件列表中移除本地已删除的文件")
+        return None
+
+    def _remove_project_entry(self, entry) -> None:
+        if self.project_dataset is None:
+            return
+        entries = [candidate for candidate in self.project_dataset.entries if candidate != entry]
+        work_path = normalize_path(entry.work_path)
+        source_path = normalize_path(entry.source_path)
+        if work_path:
+            self._project_status_by_work_path.pop(work_path, None)
+            relative_key = self._relative_status_key(work_path)
+            if relative_key:
+                self._project_status_by_relative_path.pop(relative_key, None)
+        if source_path and source_path != work_path:
+            self._project_status_by_work_path.pop(source_path, None)
+        current_path = self.current_path
+        if current_path is not None and (
+            normalize_path(current_path) == work_path or normalize_path(current_path) == source_path
+        ):
+            current_path = None
+        next_open_path = compute_next_open_path(
+            ProjectDataset(
+                root_path=self.project_dataset.root_path,
+                entries=tuple(entries),
+                current_path=current_path,
+                next_open_path=None,
+                suggested_path=current_path,
+            ),
+            self._project_status_by_work_path,
+            current_path,
+        ) if entries else None
+        self.project_dataset = ProjectDataset(
+            root_path=self.project_dataset.root_path,
+            entries=tuple(entries),
+            current_path=current_path,
+            next_open_path=next_open_path,
+            suggested_path=current_path,
+        )
+        self.file_panel.set_project(self.project_dataset)
+        self.file_panel.set_current_path(current_path)
+        self._refresh_completion_action()
 
     def _restore_last_project(self) -> None:
         saved_dir = str(self.settings.get("last_open_dir", "")).strip()

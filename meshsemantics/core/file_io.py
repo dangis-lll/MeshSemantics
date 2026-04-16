@@ -116,6 +116,26 @@ class FileIO:
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
+    def load_labels_json(cls, file_path: str | Path, expected_cell_count: int | None = None) -> np.ndarray:
+        path = Path(file_path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_json")
+
+        labels = payload.get("labels")
+        if not isinstance(labels, list):
+            raise ValueError("missing_labels")
+
+        values = np.asarray(labels, dtype=np.int32).reshape(-1)
+        declared_count = payload.get("cell_count")
+        if declared_count is not None and int(declared_count) != int(values.size):
+            raise ValueError("invalid_count")
+
+        if expected_cell_count is not None and int(values.size) != int(expected_cell_count):
+            raise ValueError("cell_count_mismatch")
+        return values
+
+    @classmethod
     def save_stl_per_label(
         cls,
         mesh,

@@ -28,7 +28,7 @@ class VedoWidget(QWidget):
         self.canvas = QVTKRenderWindowInteractor(shell)
         shell_layout.addWidget(self.canvas)
 
-        self.plotter = vedo.Plotter(qt_widget=self.canvas, bg="#09111f")
+        self.plotter = vedo.Plotter(qt_widget=self.canvas, bg="#edf3f8")
         self.renderer = self.plotter.renderer
         self.interactor = self.plotter.interactor
         self.render_window = self.canvas.GetRenderWindow()
@@ -84,7 +84,7 @@ class VedoWidget(QWidget):
         self._apply_lookup_table(colormap)
         self._bind_label_array()
         self._mark_label_array_modified()
-        self.mesh.lighting("default").phong().linewidth(0.2)
+        self.mesh.lighting("default").phong().linecolor("#000000").linewidth(0.08)
         self._ensure_interactor_ready()
         self.plotter.show(self.mesh, resetcam=True)
         self._schedule_render()

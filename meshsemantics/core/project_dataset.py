@@ -21,9 +21,6 @@ STATUS_ORDER = {
     STATUS_FAILED: 3,
 }
 
-PENDING_STATUSES = {STATUS_UNLABELED, STATUS_IN_PROGRESS}
-
-
 @dataclass(frozen=True)
 class ProjectEntry:
     display_path: str
@@ -39,7 +36,7 @@ class ProjectDataset:
     root_path: str
     entries: tuple[ProjectEntry, ...]
     current_path: str | None
-    next_pending_path: str | None
+    next_open_path: str | None
     suggested_path: str | None
 
     def contains_path(self, path: str | Path | None) -> bool:
@@ -109,7 +106,7 @@ def scan_project_dataset(
     entries.sort(key=lambda entry: entry.display_path.lower())
 
     current_path = None
-    next_pending_path = None
+    next_open_path = None
     if entries:
         if normalized_current and any(_matches_entry_path(entry, normalized_current) for entry in entries):
             current_path = normalized_current
@@ -118,7 +115,7 @@ def scan_project_dataset(
         else:
             current_path = _pick_default_entry(entries)
 
-        next_pending_path = _next_pending_entry(entries, current_path)
+        next_open_path = _next_open_entry(entries, current_path)
 
     marked_entries = tuple(
         replace(entry, is_current=_matches_entry_path(entry, current_path))
@@ -128,7 +125,7 @@ def scan_project_dataset(
         root_path=str(root.resolve()),
         entries=marked_entries,
         current_path=current_path,
-        next_pending_path=next_pending_path,
+        next_open_path=next_open_path,
         suggested_path=current_path,
     )
 
@@ -197,7 +194,7 @@ def build_relative_status_index(dataset: ProjectDataset | None) -> dict[str, str
     return index
 
 
-def compute_next_pending_path(
+def compute_next_open_path(
     dataset: ProjectDataset | None,
     status_by_work_path: dict[str, str] | None = None,
     current_path: str | Path | None = None,
@@ -205,19 +202,22 @@ def compute_next_pending_path(
     if dataset is None:
         return None
     target = normalize_path(current_path if current_path is not None else dataset.current_path)
-    pending_paths: list[str] = []
-    for entry in dataset.entries:
-        status = _status_for_entry(entry, status_by_work_path)
-        if status in PENDING_STATUSES:
-            pending_paths.append(entry.work_path)
-    if not pending_paths:
+    total_entries = len(dataset.entries)
+    if total_entries <= 1:
         return None
-    if target is None:
-        return pending_paths[0]
-    for pending_path in pending_paths:
-        if normalize_path(pending_path) != target:
-            return pending_path
-    return pending_paths[0]
+
+    current_index = next(
+        (index for index, entry in enumerate(dataset.entries) if _matches_entry_path(entry, target)),
+        None,
+    )
+    start_index = current_index if current_index is not None else -1
+    for offset in range(1, total_entries):
+        candidate_index = (start_index + offset) % total_entries
+        entry = dataset.entries[candidate_index]
+        if _status_for_entry(entry, status_by_work_path) == STATUS_COMPLETED:
+            continue
+        return entry.work_path
+    return None
 
 
 def build_work_path_status_index(
@@ -253,32 +253,39 @@ def _rebuild_dataset(
         current = current_path
     else:
         current = _pick_default_entry(sorted_entries)
-    next_pending_path = _next_pending_entry(sorted_entries, current)
+    next_open_path = _next_open_entry(sorted_entries, current)
     marked_entries = tuple(replace(entry, is_current=_matches_entry_path(entry, current)) for entry in sorted_entries)
-    return ProjectDataset(root_path, marked_entries, current, next_pending_path, current)
+    return ProjectDataset(root_path, marked_entries, current, next_open_path, current)
 
 
 def _pick_default_entry(entries: list[ProjectEntry]) -> str | None:
     if not entries:
         return None
-    pending = [entry for entry in entries if entry.status in PENDING_STATUSES]
-    if pending:
-        return pending[0].work_path
+    available = [entry for entry in entries if entry.status != STATUS_COMPLETED]
+    if available:
+        return available[0].work_path
     recent = max(entries, key=lambda entry: entry.modified_at)
     return recent.work_path
 
 
-def _next_pending_entry(entries: list[ProjectEntry] | tuple[ProjectEntry, ...], current_path: str | None) -> str | None:
-    normalized_current = normalize_path(current_path)
-    pending = [entry for entry in entries if entry.status in PENDING_STATUSES]
-    if not pending:
+def _next_open_entry(entries: list[ProjectEntry] | tuple[ProjectEntry, ...], current_path: str | None) -> str | None:
+    total_entries = len(entries)
+    if total_entries <= 1:
         return None
-    if normalized_current is None:
-        return pending[0].work_path
-    for entry in pending:
-        if not _matches_entry_path(entry, normalized_current):
-            return entry.work_path
-    return pending[0].work_path
+
+    normalized_current = normalize_path(current_path)
+    current_index = next(
+        (index for index, entry in enumerate(entries) if _matches_entry_path(entry, normalized_current)),
+        None,
+    )
+    start_index = current_index if current_index is not None else -1
+    for offset in range(1, total_entries):
+        candidate_index = (start_index + offset) % total_entries
+        entry = entries[candidate_index]
+        if entry.status == STATUS_COMPLETED:
+            continue
+        return entry.work_path
+    return None
 
 
 def _status_for_entry(entry: ProjectEntry, status_by_work_path: dict[str, str] | None = None) -> str:

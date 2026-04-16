@@ -3,17 +3,17 @@ from __future__ import annotations
 import colorsys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
-    QComboBox,
     QCheckBox,
     QDockWidget,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QAbstractSpinBox,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -30,7 +30,7 @@ from meshsemantics.config.defaults import preset_label_rgb
 class ColorChip(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(48)
+        self.setMinimumHeight(40)
         self.setProperty("panel", True)
 
     def set_rgb(self, rgb: tuple[int, int, int]) -> None:
@@ -51,6 +51,12 @@ class LabelPanel(QDockWidget):
     def __init__(self, colormap: dict[str, tuple[int, int, int]], max_label: int, parent=None) -> None:
         super().__init__("Labels", parent)
         self.setObjectName("label-panel")
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._floating_size = QSize(360, 760)
         self._colormap = dict(colormap)
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
@@ -71,15 +77,22 @@ class LabelPanel(QDockWidget):
         caption.setProperty("role", "caption")
         self.label_spin = QSpinBox()
         self.label_spin.setRange(0, max(0, max_label))
+        self.label_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.label_spin.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
         self.label_spin.valueChanged.connect(self._on_label_value_changed)
         self.add_label_button = QPushButton("Add Label")
         self.add_label_button.clicked.connect(self.add_next_label)
         self.color_chip = ColorChip()
+        self.label_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.color_chip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        top_layout.addWidget(caption, 0, 0, 1, 2)
-        top_layout.addWidget(self.label_spin, 1, 0)
-        top_layout.addWidget(self.add_label_button, 1, 1)
-        top_layout.addWidget(self.color_chip, 2, 0, 1, 2)
+        active_row = QHBoxLayout()
+        active_row.setSpacing(8)
+        active_row.addWidget(self.label_spin, 1)
+        active_row.addWidget(self.color_chip, 1)
+
+        top_layout.addWidget(caption, 0, 0)
+        top_layout.addLayout(active_row, 1, 0)
 
         swap_frame = QFrame()
         swap_frame.setProperty("panel", True)
@@ -90,8 +103,12 @@ class LabelPanel(QDockWidget):
         swap_label = QLabel("Remap Label")
         swap_label.setProperty("role", "caption")
         row = QHBoxLayout()
-        self.swap_a = QComboBox()
-        self.swap_b = QComboBox()
+        self.swap_a = QSpinBox()
+        self.swap_b = QSpinBox()
+        self.swap_a.setRange(0, max(0, max_label))
+        self.swap_b.setRange(0, max(0, max_label))
+        self.swap_a.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
+        self.swap_b.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
         self.swap_button = QPushButton("Apply")
         self.swap_button.clicked.connect(self._emit_swap)
         row.addWidget(self.swap_a)
@@ -107,14 +124,16 @@ class LabelPanel(QDockWidget):
         table_layout.setContentsMargins(12, 12, 12, 12)
         table_layout.setSpacing(8)
 
-        table_header = QHBoxLayout()
         table_label = QLabel("Label List")
         table_label.setProperty("role", "caption")
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.add_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delete_label_button = QPushButton("Delete Label")
+        self.delete_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delete_label_button.clicked.connect(self._emit_delete_label)
-        table_header.addWidget(table_label)
-        table_header.addStretch(1)
-        table_header.addWidget(self.delete_label_button)
+        action_row.addWidget(self.add_label_button)
+        action_row.addWidget(self.delete_label_button)
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Label", "Color"])
@@ -126,8 +145,9 @@ class LabelPanel(QDockWidget):
         self.table.itemChanged.connect(self._sync_colormap_from_table)
         self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
 
-        table_layout.addLayout(table_header)
+        table_layout.addWidget(table_label)
         table_layout.addWidget(self.table, 1)
+        table_layout.addLayout(action_row)
 
         footer_row = QHBoxLayout()
         footer_row.setSpacing(8)
@@ -150,6 +170,7 @@ class LabelPanel(QDockWidget):
 
         self.set_colormap(colormap)
         self.label_spin.setValue(0)
+        self.topLevelChanged.connect(self._on_top_level_changed)
 
     def current_label(self) -> int:
         return int(self.label_spin.value())
@@ -187,11 +208,10 @@ class LabelPanel(QDockWidget):
             self.table.setItem(row, 1, color_item)
         self.table.blockSignals(False)
 
-        labels = [str(item[0]) for item in items]
-        self.swap_a.clear()
-        self.swap_b.clear()
-        self.swap_a.addItems(labels)
-        self.swap_b.addItems(labels)
+        max_existing_label = self._max_existing_label()
+        self.label_spin.setRange(0, max_existing_label)
+        self.swap_a.setRange(0, max_existing_label)
+        self.swap_b.setRange(0, max_existing_label)
         self._select_row_for_label(self.current_label())
         self._refresh_chip()
 
@@ -218,12 +238,9 @@ class LabelPanel(QDockWidget):
         return changed
 
     def add_next_label(self) -> None:
-        current = self.current_label()
-        max_label = self.label_spin.maximum()
-        for next_label in range(current + 1, max_label + 1):
-            if self.ensure_label(next_label):
-                self.label_spin.setValue(next_label)
-                return
+        next_label = self._max_existing_label() + 1
+        if self.ensure_label(next_label):
+            self.label_spin.setValue(next_label)
 
     def remove_label(self, label: int) -> bool:
         key = str(int(label))
@@ -246,6 +263,16 @@ class LabelPanel(QDockWidget):
         self.complete_checkbox.setText("Completed")
         self.complete_checkbox.blockSignals(False)
         self.complete_checkbox.setEnabled(True)
+
+    def _on_top_level_changed(self, floating: bool) -> None:
+        features = QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        self.setFeatures(features)
+        if floating:
+            QTimer.singleShot(0, self._apply_floating_size)
+
+    def _apply_floating_size(self) -> None:
+        if self.isFloating():
+            self.resize(self._floating_size)
 
     def _asset_url(self, filename: str) -> str:
         path = Path(__file__).resolve().parents[1] / "assets" / filename
@@ -281,8 +308,7 @@ class LabelPanel(QDockWidget):
         )
 
     def _emit_swap(self) -> None:
-        if self.swap_a.currentText() and self.swap_b.currentText():
-            self.remap_requested.emit(int(self.swap_a.currentText()), int(self.swap_b.currentText()))
+        self.remap_requested.emit(int(self.swap_a.value()), int(self.swap_b.value()))
 
     def _emit_delete_label(self) -> None:
         label = self.selected_table_label()
@@ -330,7 +356,6 @@ class LabelPanel(QDockWidget):
         self.color_chip.set_rgb(rgb)
 
     def _on_label_value_changed(self, value: int) -> None:
-        self.ensure_label(value)
         self._select_row_for_label(value)
         self._refresh_chip()
         self.label_changed.emit(value)
@@ -374,6 +399,14 @@ class LabelPanel(QDockWidget):
             if key not in {"0", "_default"} and int(key) < int(label)
         )
         return labels[-1] if labels else 0
+
+    def _max_existing_label(self) -> int:
+        labels = [
+            int(key)
+            for key in self._colormap.keys()
+            if key != "_default"
+        ]
+        return max(labels, default=0)
 
     def _generate_distinct_color(self, label: int) -> tuple[int, int, int]:
         preset = preset_label_rgb(label)

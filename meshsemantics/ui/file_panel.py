@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -12,13 +12,13 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTableView,
     QVBoxLayout,
     QWidget,
 )
 
 from meshsemantics.core.project_dataset import (
-    PENDING_STATUSES,
     ProjectDataset,
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -162,6 +162,19 @@ class FileTableModel(QAbstractTableModel):
             return -1
         return self._visible_row_by_path.get(path, -1)
 
+    def next_incomplete_path_after(self, path: str | None = None) -> str | None:
+        if self._project is None:
+            return None
+        start_path = path or self._current_path
+        start_row = self._visible_row_by_path.get(start_path, -1) if start_path else -1
+        for visible_row in range(start_row + 1, len(self._visible_entry_rows)):
+            entry_row = self._visible_entry_rows[visible_row]
+            entry = self._project.entries[entry_row]
+            if self._status_for_entry(entry.work_path) == STATUS_COMPLETED:
+                continue
+            return entry.work_path
+        return None
+
     def set_current_path(self, path: str | None) -> None:
         if path == self._current_path:
             return
@@ -228,7 +241,7 @@ class FileTableModel(QAbstractTableModel):
         status_filter = self._status_filter
         status = self._status_for_entry(entry.work_path)
         if status_filter == "pending":
-            return status in PENDING_STATUSES
+            return status != STATUS_COMPLETED
         if status_filter != "all":
             return status == status_filter
         return True
@@ -262,7 +275,7 @@ class FileTableModel(QAbstractTableModel):
 
 class FilePanel(QDockWidget):
     open_requested = pyqtSignal(str)
-    next_todo_requested = pyqtSignal()
+    next_model_requested = pyqtSignal(str)
 
     def __init__(self, cache_limit: int = 20, parent=None) -> None:
         super().__init__("Task Queue", parent)
@@ -271,6 +284,9 @@ class FilePanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self._floating_size = QSize(540, 720)
+        self._preferred_width = 540
         self._cache_limit = cache_limit
         self._project: ProjectDataset | None = None
         self._search_timer = QTimer(self)
@@ -310,12 +326,14 @@ class FilePanel(QDockWidget):
         action_row.setSpacing(8)
         self.project_label = QLabel("No folder opened")
         self.project_label.setProperty("role", "caption")
+        self.project_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.project_label.setMinimumWidth(0)
         self.summary_label = QLabel("")
         self.summary_label.setProperty("role", "caption")
-        self.next_todo_button = QPushButton("Next To Do")
+        self.next_model_button = QPushButton("Next To Do")
         action_row.addWidget(self.project_label, 1)
         action_row.addWidget(self.summary_label)
-        action_row.addWidget(self.next_todo_button)
+        action_row.addWidget(self.next_model_button)
 
         self.model = FileTableModel(self)
 
@@ -338,6 +356,8 @@ class FilePanel(QDockWidget):
 
         self.progress_label = QLabel("")
         self.progress_label.setProperty("role", "caption")
+        self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.progress_label.setMinimumWidth(0)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setVisible(False)
@@ -353,26 +373,52 @@ class FilePanel(QDockWidget):
 
         self.search_edit.textChanged.connect(self._queue_search_text)
         self.status_filter.currentIndexChanged.connect(self._on_status_filter_changed)
-        self.next_todo_button.clicked.connect(self.next_todo_requested.emit)
+        self.next_model_button.clicked.connect(self._open_next_model)
         self.table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.topLevelChanged.connect(self._on_top_level_changed)
         self._sync_buttons()
 
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        if self._preferred_width > 0:
+            hint.setWidth(self._preferred_width)
+        return hint
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        if self._preferred_width > 0:
+            hint.setWidth(min(hint.width(), self._preferred_width))
+        return hint
+
+    def resizeEvent(self, event) -> None:
+        if event.size().width() > 0:
+            self._preferred_width = event.size().width()
+        super().resizeEvent(event)
+
     def set_project(self, project: ProjectDataset | None) -> None:
+        current_width = self.width()
         self._project = project
         if project is not None:
             self.project_label.setText(project.root_path)
+            self.project_label.setToolTip(project.root_path)
         else:
             self.project_label.setText("No folder opened")
+            self.project_label.setToolTip("")
         self.model.set_project(project)
         self._update_summary()
         self._restore_selection(project.current_path if project is not None else None)
         self._sync_buttons()
+        if current_width > 0:
+            self._preferred_width = current_width
+            self.resize(current_width, self.height())
+            self.updateGeometry()
 
     def set_busy(self, busy: bool, message: str = "") -> None:
         self.progress.setVisible(busy)
         self.progress_label.setVisible(busy)
         self.progress_label.setText(message)
-        self.next_todo_button.setEnabled(not busy and bool(self._project and self._project.next_pending_path))
+        self.progress_label.setToolTip(message if busy else "")
+        self.next_model_button.setEnabled(not busy and self._has_next_model())
         self.table.setEnabled(not busy)
 
     def selected_path(self) -> str | None:
@@ -396,20 +442,12 @@ class FilePanel(QDockWidget):
                 root_path=self._project.root_path,
                 entries=self._project.entries,
                 current_path=path,
-                next_pending_path=self._project.next_pending_path,
+                next_open_path=self._project.next_open_path,
                 suggested_path=self._project.suggested_path,
             )
 
-    def update_status(self, path: str, status: str, next_pending_path: str | None = None) -> None:
+    def update_status(self, path: str, status: str) -> None:
         self.model.update_status(path, status)
-        if self._project is not None:
-            self._project = ProjectDataset(
-                root_path=self._project.root_path,
-                entries=self._project.entries,
-                current_path=self._project.current_path,
-                next_pending_path=next_pending_path,
-                suggested_path=self._project.suggested_path,
-            )
         self._update_summary()
         self._sync_buttons()
 
@@ -450,7 +488,15 @@ class FilePanel(QDockWidget):
 
     def _sync_buttons(self) -> None:
         busy = self.progress.isVisible()
-        self.next_todo_button.setEnabled(not busy and bool(self._project and self._project.next_pending_path))
+        self.next_model_button.setEnabled(not busy and self._has_next_model())
+
+    def _has_next_model(self) -> bool:
+        return self.model.next_incomplete_path_after(self.selected_path()) is not None
+
+    def _open_next_model(self) -> None:
+        next_path = self.model.next_incomplete_path_after(self.selected_path())
+        if next_path is not None:
+            self.next_model_requested.emit(next_path)
 
     def _update_summary(self) -> None:
         total = len(self._project.entries) if self._project is not None else 0
@@ -469,6 +515,14 @@ class FilePanel(QDockWidget):
         if value >= scroll_bar.maximum() - 8 and self.model.canFetchMore():
             self.model.fetchMore()
             self._update_summary()
+
+    def _on_top_level_changed(self, floating: bool) -> None:
+        if floating:
+            QTimer.singleShot(0, self._apply_floating_size)
+
+    def _apply_floating_size(self) -> None:
+        if self.isFloating():
+            self.resize(self._floating_size)
 
 
 def _status_text(status: str) -> str:

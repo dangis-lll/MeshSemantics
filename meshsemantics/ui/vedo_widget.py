@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import vedo
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
@@ -31,6 +31,9 @@ class VedoWidget(QWidget):
         self.plotter = vedo.Plotter(qt_widget=self.canvas, bg="#09111f")
         self.renderer = self.plotter.renderer
         self.interactor = self.plotter.interactor
+        self.render_window = self.canvas.GetRenderWindow()
+        self._interactor_initialized = False
+        self._render_scheduled = False
 
         self.mesh = None
         self.base_labels = np.zeros(0, dtype=np.int32)
@@ -48,6 +51,28 @@ class VedoWidget(QWidget):
         self.control_line_actor = None
         self.selected_control_actor = None
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._ensure_interactor_ready()
+        self._schedule_render()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._schedule_render()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            if not self.window().isMinimized():
+                self._ensure_interactor_ready()
+                self._schedule_render()
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        if event.type() == QEvent.Type.Expose:
+            self._schedule_render()
+        return handled
+
     def set_mesh(self, mesh, labels: np.ndarray, colormap: dict[str, tuple[int, int, int]]) -> None:
         self.plotter.clear()
         self.mesh = mesh.clone(deep=True)
@@ -60,7 +85,9 @@ class VedoWidget(QWidget):
         self._bind_label_array()
         self._mark_label_array_modified()
         self.mesh.lighting("default").phong().linewidth(0.2)
+        self._ensure_interactor_ready()
         self.plotter.show(self.mesh, resetcam=True)
+        self._schedule_render()
         self.mesh_loaded.emit(int(self.base_labels.size))
 
     def clear_mesh(self) -> None:
@@ -112,8 +139,12 @@ class VedoWidget(QWidget):
         self.render()
 
     def render(self) -> None:
+        self._ensure_interactor_ready()
         if self.plotter.window:
             self.plotter.render()
+        if self.render_window is not None:
+            self.render_window.Render()
+        self.canvas.update()
 
     def set_control_points(self, payload) -> None:
         if self.mesh is None:
@@ -206,3 +237,24 @@ class VedoWidget(QWidget):
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
+
+    def _ensure_interactor_ready(self) -> None:
+        if self._interactor_initialized or self.interactor is None:
+            return
+        try:
+            self.interactor.Initialize()
+        except Exception:
+            return
+        self._interactor_initialized = True
+
+    def _schedule_render(self) -> None:
+        if self._render_scheduled:
+            return
+        self._render_scheduled = True
+        QTimer.singleShot(0, self._flush_render)
+
+    def _flush_render(self) -> None:
+        self._render_scheduled = False
+        if not self.isVisible() or self.window().isMinimized():
+            return
+        self.render()

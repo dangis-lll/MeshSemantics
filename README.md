@@ -1,5 +1,7 @@
 # MeshSemantics
 
+[中文说明](./README_zh.md)
+
 MeshSemantics is a desktop tool for interactive semantic labeling of triangle meshes.
 
 It is built with `Python + PyQt6 + vedo + VTK` and is designed for workflows where you need to open many `STL` or `VTP` meshes, mark triangle regions with labels, and export the result for later processing or dataset creation.

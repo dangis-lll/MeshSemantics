@@ -40,11 +40,9 @@ QToolButton:pressed, QPushButton:pressed {
     background: rgba(52, 111, 210, 0.95);
 }
 QToolButton#undo-button, QToolButton#redo-button {
-    padding: 8px;
-    min-width: 40px;
-    min-height: 16px;
-    max-width: 40px;
-    max-height: 34px;
+    padding: 6px;
+    min-width: 56px;
+    max-width: 60px;
 }
 QDockWidget {
     color: #21334d;

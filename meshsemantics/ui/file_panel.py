@@ -163,6 +163,8 @@ class FileTableModel(QAbstractTableModel):
         return self._visible_row_by_path.get(path, -1)
 
     def set_current_path(self, path: str | None) -> None:
+        if path == self._current_path:
+            return
         previous_path = self._current_path
         self._current_path = path
         changed_rows: set[int] = set()
@@ -182,12 +184,10 @@ class FileTableModel(QAbstractTableModel):
         row = self._entry_row_by_path.get(path)
         if row is None or self._project is None:
             return
-
         entry = self._project.entries[row]
         current_status = self._status_for_entry(entry.work_path)
         if current_status == status:
             return
-
         self._status_overrides[entry.work_path] = status
         if self._status_filter != "all":
             self.beginResetModel()
@@ -196,7 +196,6 @@ class FileTableModel(QAbstractTableModel):
             self._rebuild_visible_path_index()
             self.endResetModel()
             return
-
         visible_row = self._visible_row_by_path.get(entry.work_path)
         if visible_row is None or visible_row >= self._loaded_rows:
             return
@@ -215,23 +214,24 @@ class FileTableModel(QAbstractTableModel):
             return []
 
         visible_rows: list[int] = []
-        filter_text = self._filter_text
-        status_filter = self._status_filter
-
         for row, entry in enumerate(self._project.entries):
-            if filter_text and filter_text not in entry.display_path.lower():
-                continue
-
-            status = self._status_for_entry(entry.work_path)
-            if status_filter == "pending":
-                if status not in PENDING_STATUSES:
-                    continue
-            elif status_filter != "all" and status != status_filter:
-                continue
-
-            visible_rows.append(row)
+            if self._entry_matches_filters(entry):
+                visible_rows.append(row)
 
         return visible_rows
+
+    def _entry_matches_filters(self, entry) -> bool:
+        filter_text = self._filter_text
+        if filter_text and filter_text not in entry.display_path.lower():
+            return False
+
+        status_filter = self._status_filter
+        status = self._status_for_entry(entry.work_path)
+        if status_filter == "pending":
+            return status in PENDING_STATUSES
+        if status_filter != "all":
+            return status == status_filter
+        return True
 
     def _rebuild_visible_path_index(self) -> None:
         self._visible_row_by_path = {}
@@ -242,6 +242,14 @@ class FileTableModel(QAbstractTableModel):
             self._visible_row_by_path[entry.work_path] = visible_row
             self._visible_row_by_path[entry.source_path] = visible_row
 
+    def _entry_for_visible_row(self, visible_row: int):
+        if self._project is None:
+            return None
+        if visible_row < 0 or visible_row >= self.rowCount():
+            return None
+        entry_row = self._visible_entry_rows[visible_row]
+        return self._project.entries[entry_row]
+
     def _status_for_entry(self, work_path: str) -> str:
         return self._status_overrides.get(work_path, self._status_from_project(work_path))
 
@@ -250,14 +258,6 @@ class FileTableModel(QAbstractTableModel):
         if row is None or self._project is None:
             return STATUS_UNLABELED
         return self._project.entries[row].status
-
-    def _entry_for_visible_row(self, visible_row: int):
-        if self._project is None:
-            return None
-        if visible_row < 0 or visible_row >= self.rowCount():
-            return None
-        entry_row = self._visible_entry_rows[visible_row]
-        return self._project.entries[entry_row]
 
 
 class FilePanel(QDockWidget):
@@ -385,6 +385,9 @@ class FilePanel(QDockWidget):
         self._search_timer.stop()
 
     def set_current_path(self, path: str | None) -> None:
+        if self._project is not None and path == self._project.current_path:
+            self.model.set_current_path(path)
+            return
         self.model.set_current_path(path)
         self._restore_selection(path)
         self._sync_buttons()

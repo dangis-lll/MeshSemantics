@@ -1,5 +1,7 @@
 # MeshSemantics
 
+[English README](./README.md)
+
 MeshSemantics 是一个用于三角网格语义标注的桌面软件。
 
 它基于 `Python + PyQt6 + vedo + VTK` 开发，适合用于批量打开 `STL` / `VTP` 网格模型，对三角面片进行交互式标注，并将结果导出为后续训练、分析或处理所需的数据格式。

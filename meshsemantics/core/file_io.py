@@ -72,7 +72,11 @@ class FileIO:
             labels = np.zeros(n_cells, dtype=np.uint8)
 
         if labels.size != n_cells:
-            labels = np.resize(labels, n_cells).astype(np.uint8)
+            resized = np.zeros(n_cells, dtype=np.uint8)
+            copy_count = min(labels.size, n_cells)
+            if copy_count:
+                resized[:copy_count] = np.asarray(labels[:copy_count], dtype=np.uint8)
+            labels = resized
 
         mesh.celldata["Label"] = labels.astype("uint8").reshape(-1, 1)
         mesh.dataset.GetCellData().SetActiveScalars("Label")
@@ -125,6 +129,8 @@ class FileIO:
 
         saved_files: list[Path] = []
         for label in label_engine.unique_labels():
+            if label == 0 and not save_unlabeled:
+                continue
             cell_ids = label_engine.get_cells_by_label(label)
             if cell_ids.size == 0:
                 continue

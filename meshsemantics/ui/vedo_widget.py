@@ -63,6 +63,20 @@ class VedoWidget(QWidget):
         self.plotter.show(self.mesh, resetcam=True)
         self.mesh_loaded.emit(int(self.base_labels.size))
 
+    def clear_mesh(self) -> None:
+        self.plotter.clear()
+        self.mesh = None
+        self.base_labels = np.zeros(0, dtype=np.int32)
+        self.display_labels = np.zeros(0, dtype=np.int32)
+        self.preview_cell_ids = np.zeros(0, dtype=np.int32)
+        self._label_vtk_array = None
+        self.cell_centers = np.zeros((0, 3), dtype=np.float64)
+        self.cell_normals = np.zeros((0, 3), dtype=np.float64)
+        self.control_points_actor = None
+        self.control_line_actor = None
+        self.selected_control_actor = None
+        self.render()
+
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
         if self.mesh is None:
             return

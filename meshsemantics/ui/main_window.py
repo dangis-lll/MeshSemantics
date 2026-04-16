@@ -8,8 +8,8 @@ import sys
 
 import numpy as np
 
-from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QShortcut
+from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QMainWindow,
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         self._project_status_save_timer.setInterval(300)
         self._project_status_save_timer.timeout.connect(self._flush_project_statuses)
 
-        self.label_engine = LabelEngine(undo_limit=int(self.settings.get("undo_limit", 50)))
+        self.label_engine = LabelEngine()
         self.vedo_widget = VedoWidget()
         self.file_panel = FilePanel(cache_limit=int(self.settings.get("cache_limit", 20)))
         self.label_panel = LabelPanel(self.colormap, max_label=int(self.settings.get("max_label", 255)))
@@ -167,10 +167,10 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self.open_folder_dialog)
         save_action = QAction("Save As", self)
         save_action.triggered.connect(self.save_current)
-        undo_action = QAction(QIcon(str(self._asset_path("previous_step.png"))), "", self)
+        undo_action = QAction(self._create_arrow_icon(direction="left"), "", self)
         undo_action.setToolTip("Undo")
         undo_action.triggered.connect(self.undo)
-        redo_action = QAction(QIcon(str(self._asset_path("next_step.png"))), "", self)
+        redo_action = QAction(self._create_arrow_icon(direction="right"), "", self)
         redo_action.setToolTip("Redo")
         redo_action.triggered.connect(self.redo)
 
@@ -184,8 +184,8 @@ class MainWindow(QMainWindow):
         for action in [undo_action, redo_action]:
             toolbar.addAction(action)
 
-        self._sync_toolbar_image_button_size(toolbar, save_action, undo_action, self._asset_path("previous_step.png"))
-        self._sync_toolbar_image_button_size(toolbar, save_action, redo_action, self._asset_path("next_step.png"))
+        self._sync_toolbar_icon_button_size(toolbar, save_action, undo_action)
+        self._sync_toolbar_icon_button_size(toolbar, save_action, redo_action)
         self._style_toolbar_icon_button(toolbar, undo_action, "undo-button")
         self._style_toolbar_icon_button(toolbar, redo_action, "redo-button")
 
@@ -230,6 +230,8 @@ class MainWindow(QMainWindow):
     def open_folder_dialog(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Open Folder", str(self.last_open_dir))
         if folder:
+            if self.vedo_widget.mesh is not None:
+                self._clear_loaded_mesh()
             self.open_project(folder, auto_load=False)
 
     def open_project(self, folder: str | Path, preferred_path: str | Path | None = None, auto_load: bool = True) -> None:
@@ -534,6 +536,7 @@ class MainWindow(QMainWindow):
 
     def _consume_loaded_mesh(self, file_path: str, mesh, labels) -> None:
         mesh.filename = file_path
+        self.interactor.clear_preview(emit_preview=False)
         self.label_engine.reset(labels)
         self.label_panel.ensure_labels(self.label_engine.unique_labels())
         self.vedo_widget.set_mesh(mesh, self.label_engine.label_array, self.colormap)
@@ -667,6 +670,16 @@ class MainWindow(QMainWindow):
         self.undo_history.clear()
         self.redo_history.clear()
 
+    def _clear_loaded_mesh(self) -> None:
+        self.interactor.clear_preview(emit_preview=False)
+        self.vedo_widget.clear_mesh()
+        self.label_engine.reset(np.zeros(0, dtype=np.int32))
+        self.current_path = None
+        self.is_dirty = False
+        self._clear_history()
+        self._refresh_stats(0)
+        self._refresh_completion_action()
+
     def _base_status_for_work(self, file_path: str | Path) -> str:
         path = Path(str(file_path))
         values = np.asarray(self.label_engine.label_array, dtype=np.int32).reshape(-1)
@@ -796,38 +809,57 @@ class MainWindow(QMainWindow):
         button.setAutoRaise(False)
         button.setText("")
 
-    def _sync_toolbar_image_button_size(
+    def _sync_toolbar_icon_button_size(
         self,
         toolbar: QToolBar,
         reference_action: QAction,
-        image_action: QAction,
-        image_path: Path,
+        icon_action: QAction,
     ) -> None:
         reference_button = toolbar.widgetForAction(reference_action)
-        image_button = toolbar.widgetForAction(image_action)
-        if not isinstance(reference_button, QToolButton) or not isinstance(image_button, QToolButton):
+        icon_button = toolbar.widgetForAction(icon_action)
+        if not isinstance(reference_button, QToolButton) or not isinstance(icon_button, QToolButton):
             return
 
         button_height = max(reference_button.sizeHint().height(), reference_button.height(), 1)
-        width = max(1, round(button_height * 119 / 64))
-        image_button.setFixedSize(width, button_height)
-        image_button.setIconSize(QSize(width, button_height))
-        image_url = image_path.as_posix()
-        image_button.setStyleSheet(
-            "QToolButton {"
-            " padding: 0px;"
-            " border: none;"
-            " border-radius: 0px;"
-            " background: transparent;"
-            f" border-image: url({image_url}) 0 0 0 0 stretch stretch;"
-            "}"
-            "QToolButton:hover {"
-            f" border-image: url({image_url}) 0 0 0 0 stretch stretch;"
-            "}"
-            "QToolButton:pressed {"
-            f" border-image: url({image_url}) 0 0 0 0 stretch stretch;"
-            "}"
-        )
+        width = max(button_height + 12, 56)
+        icon_size = max(button_height - 4, 28)
+        icon_button.setFixedSize(width, button_height)
+        icon_button.setIconSize(QSize(icon_size, icon_size))
+
+    def _create_arrow_icon(self, direction: str) -> QIcon:
+        icon_size = 96
+        pixmap = QPixmap(icon_size, icon_size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidth(14)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        arrow = QPainterPath()
+        if direction == "left":
+            arrow.moveTo(QPointF(80, 48))
+            arrow.lineTo(QPointF(34, 48))
+            arrow.moveTo(QPointF(34, 48))
+            arrow.lineTo(QPointF(50, 32))
+            arrow.moveTo(QPointF(34, 48))
+            arrow.lineTo(QPointF(50, 64))
+        else:
+            arrow.moveTo(QPointF(16, 48))
+            arrow.lineTo(QPointF(62, 48))
+            arrow.moveTo(QPointF(62, 48))
+            arrow.lineTo(QPointF(46, 32))
+            arrow.moveTo(QPointF(62, 48))
+            arrow.lineTo(QPointF(46, 64))
+        painter.drawPath(arrow)
+
+        painter.end()
+        return QIcon(pixmap)
 
     def _project_root_or_parent(self, file_path: str | Path) -> str:
         normalized = normalize_path(file_path)

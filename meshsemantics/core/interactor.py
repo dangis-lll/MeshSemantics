@@ -34,7 +34,8 @@ class MeshInteractor(QObject):
     preview_changed = pyqtSignal(object)
     control_points_changed = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
-    cell_double_clicked = pyqtSignal(int)
+    surface_double_clicked = pyqtSignal(object, int)
+    landmark_picked = pyqtSignal(object)
     message = pyqtSignal(str)
 
     POINT_HIT_RADIUS_PX = 14.0
@@ -46,6 +47,7 @@ class MeshInteractor(QObject):
         self.vedo_widget = vedo_widget
         self.settings = settings
         self.state = InteractionState()
+        self._interaction_context = "label"
         self.picker = vtkCellPicker()
         self.picker.SetTolerance(0.002)
         self._suppress_right_drag = False
@@ -56,6 +58,8 @@ class MeshInteractor(QObject):
             self.vedo_widget.canvas.installEventFilter(self)
 
     def begin_spline(self) -> None:
+        if self._interaction_context != "label":
+            return
         self.state.spline_preview_cell_ids = np.zeros(0, dtype=np.int32)
         self.state.excluded_spline_cell_ids.clear()
         self.state.control_points_3d.clear()
@@ -75,7 +79,7 @@ class MeshInteractor(QObject):
         )
 
     def confirm_preview(self) -> None:
-        if self.state.mode != "SPLINE":
+        if self._interaction_context != "label" or self.state.mode != "SPLINE":
             return
         if len(self.state.control_points_3d) < 3:
             self.message.emit("At least 3 control points are required.")
@@ -100,6 +104,8 @@ class MeshInteractor(QObject):
             )
 
     def apply_preview(self) -> None:
+        if self._interaction_context != "label":
+            return
         selection = self.current_selection()
         if selection.size:
             self.apply_requested.emit(selection)
@@ -111,9 +117,36 @@ class MeshInteractor(QObject):
             self._emit_selection_preview()
         self.mode_changed.emit(self.state.mode)
 
+    def begin_landmark_pick(self) -> None:
+        if self._interaction_context != "landmark":
+            return
+        self.state.mode = "LANDMARK_PICK"
+        self.mode_changed.emit(self.state.mode)
+        self.message.emit("Landmark pick mode: left click the mesh to place the active landmark.")
+
+    def set_interaction_context(self, context: str) -> None:
+        if context not in {"label", "landmark"}:
+            return
+        self._interaction_context = context
+        self._suppress_right_drag = False
+
     def eventFilter(self, watched, event) -> bool:
         if watched is not self.vedo_widget.canvas or self.vedo_widget.mesh is None:
             return super().eventFilter(watched, event)
+
+        if self.state.mode == "LANDMARK_PICK":
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+                self.clear_preview(emit_preview=False)
+                self.message.emit("Landmark pick cancelled.")
+                return True
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                point = self._pick_surface_point(*self._to_vtk_display(event.position().x(), event.position().y()))
+                if point is None:
+                    self.message.emit("No surface point found under the cursor.")
+                    return True
+                self.clear_preview(emit_preview=False)
+                self.landmark_picked.emit(point)
+                return True
 
         if event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.RightButton:
             self._suppress_right_drag = True
@@ -123,17 +156,21 @@ class MeshInteractor(QObject):
             and event.button() == Qt.MouseButton.LeftButton
             and self.state.mode == "NORMAL"
         ):
-            self._emit_double_clicked_cell(*self._to_vtk_display(event.position().x(), event.position().y()))
+            self._emit_double_clicked_surface(*self._to_vtk_display(event.position().x(), event.position().y()))
             return True
 
-        if event.type() == QEvent.Type.KeyPress and self.state.mode in {"SPLINE", "CONFIRM"}:
+        if (
+            self._interaction_context == "label"
+            and event.type() == QEvent.Type.KeyPress
+            and self.state.mode in {"SPLINE", "CONFIRM"}
+        ):
             key = event.key()
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if self._delete_highlighted_control_point():
                     return True
 
         if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.RightButton:
+            if event.button() == Qt.MouseButton.RightButton and self._interaction_context == "label":
                 self._suppress_right_drag = True
                 self._toggle_pick(*self._to_vtk_display(event.position().x(), event.position().y()))
                 return True
@@ -358,11 +395,12 @@ class MeshInteractor(QObject):
         self._emit_selection_preview()
         self.message.emit(f"{action} cell {cell_id}. Total selected: {self.current_selection().size}")
 
-    def _emit_double_clicked_cell(self, x: float, y: float) -> None:
+    def _emit_double_clicked_surface(self, x: float, y: float) -> None:
         self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
         cell_id = int(self.picker.GetCellId())
         if cell_id >= 0:
-            self.cell_double_clicked.emit(cell_id)
+            point = tuple(float(v) for v in self.picker.GetPickPosition())
+            self.surface_double_clicked.emit(point, cell_id)
 
     def _emit_selection_preview(self) -> None:
         self.preview_changed.emit(self.current_selection())

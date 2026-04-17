@@ -10,6 +10,61 @@ from vtkmodules.vtkCommonCore import vtkLookupTable
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 
+class MeshSemanticsVTKCanvas(QVTKRenderWindowInteractor):
+    _ALLOWED_PLAIN_KEYS = {
+        Qt.Key.Key_S,
+        Qt.Key.Key_E,
+        Qt.Key.Key_C,
+        Qt.Key.Key_M,
+        Qt.Key.Key_Return,
+        Qt.Key.Key_Enter,
+        Qt.Key.Key_Delete,
+        Qt.Key.Key_Backspace,
+    }
+    _ALLOWED_CTRL_KEYS = {
+        Qt.Key.Key_S,
+        Qt.Key.Key_Z,
+        Qt.Key.Key_Y,
+    }
+
+    def _should_block_key(self, event) -> bool:
+        key = event.key()
+        if key in {
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Meta,
+        }:
+            return True
+
+        modifiers = event.modifiers()
+        allowed_mask = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        if modifiers & ~allowed_mask:
+            return True
+
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            return key not in self._ALLOWED_CTRL_KEYS
+
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            if key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+                return False
+            return True
+
+        return key not in self._ALLOWED_PLAIN_KEYS
+
+    def keyPressEvent(self, event) -> None:
+        if self._should_block_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        if self._should_block_key(event):
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+
 class VedoWidget(QWidget):
     mesh_loaded = pyqtSignal(int)
 
@@ -25,7 +80,7 @@ class VedoWidget(QWidget):
         shell_layout.setContentsMargins(1, 1, 1, 1)
         layout.addWidget(shell)
 
-        self.canvas = QVTKRenderWindowInteractor(shell)
+        self.canvas = MeshSemanticsVTKCanvas(shell)
         shell_layout.addWidget(self.canvas)
 
         self.plotter = vedo.Plotter(qt_widget=self.canvas, bg="#edf3f8")
@@ -50,6 +105,8 @@ class VedoWidget(QWidget):
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
+        self.landmark_points_actor = None
+        self.selected_landmark_actor = None
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -102,6 +159,8 @@ class VedoWidget(QWidget):
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
+        self.landmark_points_actor = None
+        self.selected_landmark_actor = None
         self.render()
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
@@ -178,6 +237,29 @@ class VedoWidget(QWidget):
             self.plotter.add(self.control_line_actor)
         self.render()
 
+    def set_landmarks(self, landmarks: list[dict], active_index: int = -1) -> None:
+        if self.mesh is None:
+            return
+        self._remove_landmark_actors()
+        visible_points = []
+        active_point = None
+        for index, landmark in enumerate(landmarks):
+            point = landmark.get("position")
+            if point is None:
+                continue
+            point_tuple = tuple(float(value) for value in point)
+            visible_points.append(point_tuple)
+            if index == active_index:
+                active_point = point_tuple
+
+        if visible_points:
+            self.landmark_points_actor = vedo.Points(np.asarray(visible_points, dtype=np.float64), r=16).c("#ff5c7a")
+            self.plotter.add(self.landmark_points_actor)
+        if active_point is not None:
+            self.selected_landmark_actor = vedo.Points(np.asarray([active_point], dtype=np.float64), r=24).c("#ffd166")
+            self.plotter.add(self.selected_landmark_actor)
+        self.render()
+
     def _apply_lookup_table(self, colormap: dict[str, tuple[int, int, int]]) -> None:
         lut = self.lookup_table
         lut.SetTableRange(0.0, 256.0)
@@ -237,6 +319,13 @@ class VedoWidget(QWidget):
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
+
+    def _remove_landmark_actors(self) -> None:
+        for actor in [self.landmark_points_actor, self.selected_landmark_actor]:
+            if actor is not None:
+                self.plotter.remove(actor)
+        self.landmark_points_actor = None
+        self.selected_landmark_actor = None
 
     def _ensure_interactor_ready(self) -> None:
         if self._interactor_initialized or self.interactor is None:

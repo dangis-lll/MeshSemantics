@@ -136,6 +136,54 @@ class FileIO:
         return values
 
     @classmethod
+    def save_landmarks_json(cls, file_path: str | Path, landmarks: list[dict]) -> None:
+        path = Path(file_path)
+        payload = {
+            "landmark_count": int(len(landmarks)),
+            "landmarks": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "coordinates": (
+                        None
+                        if item.get("position") is None
+                        else [float(v) for v in item.get("position", ())]
+                    ),
+                }
+                for item in landmarks
+            ],
+        }
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    @classmethod
+    def load_landmarks_json(cls, file_path: str | Path) -> list[dict]:
+        path = Path(file_path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_json")
+
+        raw_landmarks = payload.get("landmarks")
+        if not isinstance(raw_landmarks, list):
+            raise ValueError("missing_landmarks")
+
+        landmarks: list[dict] = []
+        for index, item in enumerate(raw_landmarks):
+            if not isinstance(item, dict):
+                raise ValueError("invalid_landmark")
+            name = str(item.get("name") or f"Landmark {index + 1}").strip()
+            coords = item.get("coordinates", item.get("position"))
+            position = None
+            if coords is not None:
+                if not isinstance(coords, (list, tuple)) or len(coords) != 3:
+                    raise ValueError("invalid_landmark")
+                position = tuple(float(value) for value in coords)
+            landmarks.append({"name": name or f"Landmark {index + 1}", "position": position})
+
+        declared_count = payload.get("landmark_count")
+        if declared_count is not None and int(declared_count) != int(len(landmarks)):
+            raise ValueError("invalid_count")
+        return landmarks
+
+    @classmethod
     def save_stl_per_label(
         cls,
         mesh,

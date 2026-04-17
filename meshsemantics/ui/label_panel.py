@@ -3,7 +3,7 @@ from __future__ import annotations
 import colorsys
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
@@ -41,6 +41,7 @@ class ColorChip(QFrame):
 
 
 class LabelPanel(QDockWidget):
+    panel_activated = pyqtSignal()
     label_changed = pyqtSignal(int)
     colormap_changed = pyqtSignal(dict)
     remap_requested = pyqtSignal(int, int)
@@ -176,6 +177,26 @@ class LabelPanel(QDockWidget):
         outer.addWidget(table_frame, 1)
         outer.addLayout(footer_row)
         self.setWidget(content)
+        self._activation_widgets = [
+            self,
+            content,
+            self.label_spin,
+            self.label_spin.lineEdit(),
+            self.add_label_button,
+            self.swap_a,
+            self.swap_a.lineEdit(),
+            self.swap_b,
+            self.swap_b.lineEdit(),
+            self.swap_button,
+            self.table,
+            self.table.viewport(),
+            self.overwrite_checkbox,
+            self.delete_label_button,
+            self.quick_save_button,
+            self.complete_checkbox,
+        ]
+        for widget in self._activation_widgets:
+            widget.installEventFilter(self)
 
         self.set_colormap(colormap)
         self.label_spin.setValue(0)
@@ -443,3 +464,11 @@ class LabelPanel(QDockWidget):
         value = 0.92 - 0.08 * (label % 2)
         rgb = colorsys.hsv_to_rgb(hue, min(saturation, 0.88), value)
         return tuple(int(channel * 255) for channel in rgb)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched in self._activation_widgets and event.type() in {
+            QEvent.Type.FocusIn,
+            QEvent.Type.MouseButtonPress,
+        }:
+            self.panel_activated.emit()
+        return super().eventFilter(watched, event)

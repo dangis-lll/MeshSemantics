@@ -127,10 +127,12 @@ class LabelPanel(QDockWidget):
 
         table_label = QLabel("Label List")
         table_label.setProperty("role", "caption")
-        self.overwrite_checkbox = QCheckBox("Overwrite Existing Labels")
+        self.overwrite_checkbox = QCheckBox("Overwrite")
         self.overwrite_checkbox.setObjectName("overwrite-toggle")
         self.overwrite_checkbox.setChecked(False)
-        self.overwrite_checkbox.setStyleSheet(self._indicator_checkbox_qss("overwrite-toggle"))
+        self.overwrite_checkbox.setStyleSheet(
+            self._indicator_checkbox_qss("overwrite-toggle", checked_color="#c73333")
+        )
         self.overwrite_checkbox.clicked.connect(self._emit_overwrite_mode_changed)
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -152,8 +154,8 @@ class LabelPanel(QDockWidget):
         self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
 
         table_layout.addWidget(table_label)
-        table_layout.addWidget(self.overwrite_checkbox)
         table_layout.addWidget(self.table, 1)
+        table_layout.addWidget(self.overwrite_checkbox)
         table_layout.addLayout(action_row)
 
         footer_row = QHBoxLayout()

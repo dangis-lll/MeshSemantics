@@ -64,6 +64,7 @@ DEFAULT_SETTINGS = {
     "cache_limit": 20,
     "exclude_backfaces": True,
     "save_unlabeled_stl": False,
+    "overwrite_existing_labels": False,
     "window_size": [1560, 980],
     "last_open_dir": "",
     "last_file_by_folder": {},

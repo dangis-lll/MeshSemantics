@@ -34,6 +34,7 @@ class MeshInteractor(QObject):
     preview_changed = pyqtSignal(object)
     control_points_changed = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
+    cell_double_clicked = pyqtSignal(int)
     message = pyqtSignal(str)
 
     POINT_HIT_RADIUS_PX = 14.0
@@ -116,6 +117,13 @@ class MeshInteractor(QObject):
 
         if event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.RightButton:
             self._suppress_right_drag = True
+            return True
+        if (
+            event.type() == QEvent.Type.MouseButtonDblClick
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.state.mode == "NORMAL"
+        ):
+            self._emit_double_clicked_cell(*self._to_vtk_display(event.position().x(), event.position().y()))
             return True
 
         if event.type() == QEvent.Type.KeyPress and self.state.mode in {"SPLINE", "CONFIRM"}:
@@ -349,6 +357,12 @@ class MeshInteractor(QObject):
             action = "Selected"
         self._emit_selection_preview()
         self.message.emit(f"{action} cell {cell_id}. Total selected: {self.current_selection().size}")
+
+    def _emit_double_clicked_cell(self, x: float, y: float) -> None:
+        self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
+        cell_id = int(self.picker.GetCellId())
+        if cell_id >= 0:
+            self.cell_double_clicked.emit(cell_id)
 
     def _emit_selection_preview(self) -> None:
         self.preview_changed.emit(self.current_selection())

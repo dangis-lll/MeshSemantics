@@ -16,9 +16,26 @@ class LabelEngine:
     def size(self) -> int:
         return int(self.label_array.size)
 
-    def assign(self, cell_ids: np.ndarray | Iterable[int], label: int) -> bool:
+    def assignable_cells(
+        self,
+        cell_ids: np.ndarray | Iterable[int],
+        *,
+        overwrite_existing: bool = True,
+    ) -> np.ndarray:
         ids = np.unique(np.asarray(cell_ids, dtype=np.int32).reshape(-1))
         ids = ids[(ids >= 0) & (ids < self.label_array.size)]
+        if not overwrite_existing:
+            ids = ids[self.label_array[ids] == 0]
+        return ids
+
+    def assign(
+        self,
+        cell_ids: np.ndarray | Iterable[int],
+        label: int,
+        *,
+        overwrite_existing: bool = True,
+    ) -> bool:
+        ids = self.assignable_cells(cell_ids, overwrite_existing=overwrite_existing)
         if ids.size == 0:
             return False
         before = self.label_array[ids].copy()

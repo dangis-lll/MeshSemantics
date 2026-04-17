@@ -148,12 +148,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MeshSemantics")
         width, height = self.settings.get("window_size", [1560, 980])
         self.resize(int(width), int(height))
+        self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self.setAcceptDrops(True)
         self.setStyleSheet(APP_QSS)
         self.setCentralWidget(self.vedo_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.label_panel)
         self._build_floating_action_bar()
+        self.label_panel.set_overwrite_existing_labels(bool(self.settings.get("overwrite_existing_labels", False)))
 
         status = QStatusBar()
         status.showMessage("Ready")
@@ -269,6 +271,7 @@ class MainWindow(QMainWindow):
         self.label_panel.colormap_changed.connect(self._on_colormap_changed)
         self.label_panel.remap_requested.connect(self._remap_labels)
         self.label_panel.delete_requested.connect(self._delete_label)
+        self.label_panel.overwrite_mode_changed.connect(self._on_overwrite_mode_changed)
         self.label_panel.completion_toggle_requested.connect(self.toggle_task_completed)
         self.label_panel.quick_save_requested.connect(self.quick_save_current)
 
@@ -278,6 +281,7 @@ class MainWindow(QMainWindow):
         self.interactor.preview_changed.connect(self.vedo_widget.preview_cells)
         self.interactor.control_points_changed.connect(self.vedo_widget.set_control_points)
         self.interactor.apply_requested.connect(self._apply_cells)
+        self.interactor.cell_double_clicked.connect(self._select_label_for_cell)
         self.interactor.message.connect(self.statusBar().showMessage)
 
     def _bind_shortcuts(self) -> None:
@@ -646,12 +650,24 @@ class MainWindow(QMainWindow):
 
     def _apply_cells(self, cell_ids) -> None:
         before_labels, before_ui, dirty_before = self._capture_history_state()
-        if self.label_engine.assign(cell_ids, self.label_panel.current_label()):
+        overwrite_existing = self.label_panel.overwrite_existing_labels()
+        raw_ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
+        assignable_ids = self.label_engine.assignable_cells(
+            raw_ids,
+            overwrite_existing=overwrite_existing,
+        )
+        if self.label_engine.assign(assignable_ids, self.label_panel.current_label(), overwrite_existing=True):
             self.is_dirty = True
             self._push_history(before_labels, before_ui, dirty_before)
             self._update_mesh_view()
             self._update_current_status_after_edit()
-            self.statusBar().showMessage(f"Assigned label {self.label_panel.current_label()} to {len(cell_ids)} cells")
+            skipped_count = max(0, int(raw_ids.size) - int(assignable_ids.size))
+            message = f"Assigned label {self.label_panel.current_label()} to {int(assignable_ids.size)} cells"
+            if skipped_count > 0 and not overwrite_existing:
+                message = f"{message} | Skipped {skipped_count} labeled cells"
+            self.statusBar().showMessage(message)
+        elif raw_ids.size > 0 and not overwrite_existing:
+            self.statusBar().showMessage("Selection already has labels. Enable overwrite to replace them.")
         self.interactor.clear_preview()
 
     def _remap_labels(self, source: int, target: int) -> None:
@@ -691,6 +707,18 @@ class MainWindow(QMainWindow):
         self.colormap = colormap
         save_colormap(colormap)
         self.vedo_widget.set_colormap(colormap)
+
+    def _on_overwrite_mode_changed(self, enabled: bool) -> None:
+        self.settings["overwrite_existing_labels"] = bool(enabled)
+        self._schedule_settings_save()
+
+    def _select_label_for_cell(self, cell_id: int) -> None:
+        if cell_id < 0 or cell_id >= self.label_engine.size:
+            return
+        label = int(self.label_engine.label_array[cell_id])
+        if label <= 0:
+            return
+        self.label_panel.label_spin.setValue(label)
 
     def _on_mode_changed(self, mode: str) -> None:
         self.statusBar().showMessage(f"Mode: {mode}")

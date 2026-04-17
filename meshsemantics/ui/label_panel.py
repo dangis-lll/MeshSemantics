@@ -45,6 +45,7 @@ class LabelPanel(QDockWidget):
     colormap_changed = pyqtSignal(dict)
     remap_requested = pyqtSignal(int, int)
     delete_requested = pyqtSignal(int)
+    overwrite_mode_changed = pyqtSignal(bool)
     completion_toggle_requested = pyqtSignal()
     quick_save_requested = pyqtSignal()
 
@@ -126,6 +127,11 @@ class LabelPanel(QDockWidget):
 
         table_label = QLabel("Label List")
         table_label.setProperty("role", "caption")
+        self.overwrite_checkbox = QCheckBox("Overwrite Existing Labels")
+        self.overwrite_checkbox.setObjectName("overwrite-toggle")
+        self.overwrite_checkbox.setChecked(False)
+        self.overwrite_checkbox.setStyleSheet(self._indicator_checkbox_qss("overwrite-toggle"))
+        self.overwrite_checkbox.clicked.connect(self._emit_overwrite_mode_changed)
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         self.add_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -146,6 +152,7 @@ class LabelPanel(QDockWidget):
         self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
 
         table_layout.addWidget(table_label)
+        table_layout.addWidget(self.overwrite_checkbox)
         table_layout.addWidget(self.table, 1)
         table_layout.addLayout(action_row)
 
@@ -182,12 +189,15 @@ class LabelPanel(QDockWidget):
         return {
             "colormap": self.colormap(),
             "current_label": self.current_label(),
+            "overwrite_existing": self.overwrite_existing_labels(),
         }
 
     def restore_state(self, state: dict) -> None:
         colormap = state.get("colormap", self.colormap())
         current_label = int(state.get("current_label", 0))
+        overwrite_existing = bool(state.get("overwrite_existing", False))
         self.set_colormap(colormap)
+        self.set_overwrite_existing_labels(overwrite_existing)
         self.label_spin.setValue(current_label)
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
@@ -264,6 +274,14 @@ class LabelPanel(QDockWidget):
         self.complete_checkbox.blockSignals(False)
         self.complete_checkbox.setEnabled(True)
 
+    def overwrite_existing_labels(self) -> bool:
+        return self.overwrite_checkbox.isChecked()
+
+    def set_overwrite_existing_labels(self, enabled: bool) -> None:
+        self.overwrite_checkbox.blockSignals(True)
+        self.overwrite_checkbox.setChecked(bool(enabled))
+        self.overwrite_checkbox.blockSignals(False)
+
     def _on_top_level_changed(self, floating: bool) -> None:
         features = QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         self.setFeatures(features)
@@ -279,8 +297,11 @@ class LabelPanel(QDockWidget):
         return path.as_posix()
 
     def _completion_checkbox_qss(self) -> str:
+        return self._indicator_checkbox_qss("completion-toggle", checked_color="#c73333")
+
+    def _indicator_checkbox_qss(self, object_name: str, checked_color: str = "#2f5f9a") -> str:
         return (
-            "QCheckBox#completion-toggle {"
+            f"QCheckBox#{object_name} {{"
             " color: #334a68;"
             " font-weight: 600;"
             " spacing: 8px;"
@@ -290,19 +311,19 @@ class LabelPanel(QDockWidget):
             " border-radius: 10px;"
             " background: rgba(255, 255, 255, 0.98);"
             "}"
-            "QCheckBox#completion-toggle:checked {"
-            " color: #c73333;"
+            f"QCheckBox#{object_name}:checked {{"
+            f" color: {checked_color};"
             " font-weight: 800;"
             "}"
-            "QCheckBox#completion-toggle:hover {"
+            f"QCheckBox#{object_name}:hover {{"
             " background: rgba(245, 249, 255, 0.98);"
             "}"
-            "QCheckBox#completion-toggle::indicator {"
+            f"QCheckBox#{object_name}::indicator {{"
             " width: 18px;"
             " height: 18px;"
             f" image: url({self._checkbox_unchecked_asset});"
             "}"
-            "QCheckBox#completion-toggle::indicator:checked {"
+            f"QCheckBox#{object_name}::indicator:checked {{"
             f" image: url({self._checkbox_checked_asset});"
             "}"
         )
@@ -315,6 +336,9 @@ class LabelPanel(QDockWidget):
         if label <= 0:
             return
         self.delete_requested.emit(label)
+
+    def _emit_overwrite_mode_changed(self) -> None:
+        self.overwrite_mode_changed.emit(self.overwrite_existing_labels())
 
     def _edit_color(self, item: QTableWidgetItem) -> None:
         if item.column() != 1:

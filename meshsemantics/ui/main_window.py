@@ -11,7 +11,7 @@ from typing import Callable
 import numpy as np
 
 from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRegion, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -209,7 +209,22 @@ class MainWindow(QMainWindow):
         )
         self.floating_complete_checkbox.clicked.connect(self.toggle_task_completed)
         self.vedo_widget.installEventFilter(self)
+        for control in (
+            self.floating_previous_model_button,
+            self.floating_next_model_button,
+            self.floating_quick_save_button,
+            self.floating_complete_checkbox,
+        ):
+            control.installEventFilter(self)
         self._position_floating_action_bar()
+
+    def _update_floating_control_mask(self, control: QWidget) -> None:
+        rect = control.rect()
+        if rect.isEmpty():
+            return
+        path = QPainterPath()
+        path.addRoundedRect(float(rect.x()), float(rect.y()), float(rect.width()), float(rect.height()), 10.0, 10.0)
+        control.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _position_floating_action_bar(self) -> None:
         if not hasattr(self, "floating_previous_model_button"):
@@ -241,6 +256,7 @@ class MainWindow(QMainWindow):
         cursor_x = x
         for control, width in zip(visible_controls, widths):
             control.move(cursor_x, y)
+            self._update_floating_control_mask(control)
             control.raise_()
             cursor_x += width + spacing
 
@@ -251,6 +267,13 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: QObject, event) -> bool:
         if watched is self.vedo_widget and event.type() == event.Type.Resize:
             self._position_floating_action_bar()
+        elif watched in {
+            getattr(self, "floating_previous_model_button", None),
+            getattr(self, "floating_next_model_button", None),
+            getattr(self, "floating_quick_save_button", None),
+            getattr(self, "floating_complete_checkbox", None),
+        } and event.type() in {event.Type.Resize, event.Type.Show}:
+            self._update_floating_control_mask(watched)
         return super().eventFilter(watched, event)
 
     def _build_toolbar(self) -> None:

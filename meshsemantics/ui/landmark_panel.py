@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QDockWidget,
     QFrame,
     QHeaderView,
     QHBoxLayout,
@@ -21,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-class LandmarkPanel(QDockWidget):
+class LandmarkPanel(QWidget):
     panel_activated = pyqtSignal()
     add_requested = pyqtSignal(str)
     rename_requested = pyqtSignal(int, str)
@@ -33,20 +32,14 @@ class LandmarkPanel(QDockWidget):
     export_requested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
-        super().__init__("Landmarks", parent)
+        super().__init__(parent)
         self.setObjectName("landmark-panel")
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        self._floating_size = QSize(420, 760)
         self._active_index = -1
         self._manual_name_width: int | None = None
         self._preserve_input_text = False
 
-        content = QWidget(self)
-        outer = QVBoxLayout(content)
+        content = self
+        outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(10)
 
@@ -132,7 +125,6 @@ class LandmarkPanel(QDockWidget):
         outer.addWidget(top)
         outer.addWidget(table_frame, 1)
         outer.addLayout(footer)
-        self.setWidget(content)
         self._activation_widgets = [
             self,
             content,
@@ -149,7 +141,6 @@ class LandmarkPanel(QDockWidget):
         for widget in self._activation_widgets:
             widget.installEventFilter(self)
 
-        self.topLevelChanged.connect(self._on_top_level_changed)
         self._apply_default_column_widths()
         self._sync_action_state()
 
@@ -192,7 +183,7 @@ class LandmarkPanel(QDockWidget):
         if not self._preserve_input_text:
             self._sync_name_from_selection()
         self._sync_action_state()
-        if not self.isFloating() and panel_width > 0 and self.width() != panel_width:
+        if panel_width > 0 and self.width() != panel_width:
             self.resize(panel_width, self.height())
         self._preserve_input_text = False
 
@@ -235,17 +226,6 @@ class LandmarkPanel(QDockWidget):
         else:
             self.pick_button.setText("Pick On Mesh")
             self.selection_hint.setText("Double click a row to make it active, then pick a point on the mesh.")
-
-    def _on_top_level_changed(self, floating: bool) -> None:
-        features = QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        self.setFeatures(features)
-        if floating:
-            QTimer.singleShot(0, self._apply_floating_size)
-
-    def _apply_floating_size(self) -> None:
-        if self.isFloating():
-            self.resize(self._floating_size)
-            self._apply_default_column_widths()
 
     def _emit_add_requested(self) -> None:
         name = self.name_edit.text().strip()

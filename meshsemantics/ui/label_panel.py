@@ -3,12 +3,11 @@ from __future__ import annotations
 import colorsys
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
     QCheckBox,
-    QDockWidget,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -40,7 +39,7 @@ class ColorChip(QFrame):
         )
 
 
-class LabelPanel(QDockWidget):
+class LabelPanel(QWidget):
     panel_activated = pyqtSignal()
     label_changed = pyqtSignal(int)
     colormap_changed = pyqtSignal(dict)
@@ -51,20 +50,14 @@ class LabelPanel(QDockWidget):
     quick_save_requested = pyqtSignal()
 
     def __init__(self, colormap: dict[str, tuple[int, int, int]], max_label: int, parent=None) -> None:
-        super().__init__("Labels", parent)
+        super().__init__(parent)
         self.setObjectName("label-panel")
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        self._floating_size = QSize(360, 760)
         self._colormap = dict(colormap)
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
 
-        content = QWidget(self)
-        outer = QVBoxLayout(content)
+        content = self
+        outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(10)
 
@@ -176,7 +169,6 @@ class LabelPanel(QDockWidget):
         outer.addWidget(swap_frame)
         outer.addWidget(table_frame, 1)
         outer.addLayout(footer_row)
-        self.setWidget(content)
         self._activation_widgets = [
             self,
             content,
@@ -200,7 +192,6 @@ class LabelPanel(QDockWidget):
 
         self.set_colormap(colormap)
         self.label_spin.setValue(0)
-        self.topLevelChanged.connect(self._on_top_level_changed)
 
     def current_label(self) -> int:
         return int(self.label_spin.value())
@@ -288,7 +279,7 @@ class LabelPanel(QDockWidget):
         return True
 
     def refresh_stats(self, total_cells: int, labeled_cells: int) -> None:
-        self.setWindowTitle(f"Labels  |  {labeled_cells}/{total_cells}")
+        self.setToolTip(f"Labels | {labeled_cells}/{total_cells}")
 
     def set_completion_state(self, is_completed: bool) -> None:
         self.complete_checkbox.blockSignals(True)
@@ -304,16 +295,6 @@ class LabelPanel(QDockWidget):
         self.overwrite_checkbox.blockSignals(True)
         self.overwrite_checkbox.setChecked(bool(enabled))
         self.overwrite_checkbox.blockSignals(False)
-
-    def _on_top_level_changed(self, floating: bool) -> None:
-        features = QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        self.setFeatures(features)
-        if floating:
-            QTimer.singleShot(0, self._apply_floating_size)
-
-    def _apply_floating_size(self) -> None:
-        if self.isFloating():
-            self.resize(self._floating_size)
 
     def _asset_url(self, filename: str) -> str:
         path = Path(__file__).resolve().parents[1] / "assets" / filename

@@ -74,13 +74,13 @@ class VedoWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        shell = QFrame(self)
-        shell.setProperty("panel", True)
-        shell_layout = QVBoxLayout(shell)
+        self.shell = QFrame(self)
+        self.shell.setProperty("panel", True)
+        shell_layout = QVBoxLayout(self.shell)
         shell_layout.setContentsMargins(1, 1, 1, 1)
-        layout.addWidget(shell)
+        layout.addWidget(self.shell)
 
-        self.canvas = MeshSemanticsVTKCanvas(shell)
+        self.canvas = MeshSemanticsVTKCanvas(self.shell)
         shell_layout.addWidget(self.canvas)
 
         self.plotter = vedo.Plotter(qt_widget=self.canvas, bg="#edf3f8")

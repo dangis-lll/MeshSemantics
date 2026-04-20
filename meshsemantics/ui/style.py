@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+
 APP_QSS = """
 QMainWindow, QWidget {
     background: #f5f8fc;
@@ -94,6 +97,63 @@ QLineEdit, QSpinBox, QComboBox, QTableWidget, QTableView, QTreeView, QProgressBa
     selection-background-color: rgba(99, 158, 255, 0.22);
     selection-color: #1f3150;
 }
+QComboBox, QSpinBox {
+    min-height: 22px;
+    padding-right: 28px;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 28px;
+    border: none;
+    border-left: 1px solid rgba(132, 162, 210, 0.22);
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    background: rgba(241, 246, 255, 0.92);
+}
+QComboBox::down-arrow {
+    width: 12px;
+    height: 12px;
+}
+QComboBox QAbstractItemView {
+    background: rgba(255, 255, 255, 0.99);
+    border: 1px solid rgba(132, 162, 210, 0.30);
+    border-radius: 10px;
+    outline: 0;
+    padding: 4px;
+    selection-background-color: rgba(99, 158, 255, 0.18);
+    selection-color: #1f3150;
+}
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 24px;
+    border: none;
+    border-left: 1px solid rgba(132, 162, 210, 0.22);
+    background: rgba(241, 246, 255, 0.92);
+}
+QSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 10px;
+}
+QSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-top: 1px solid rgba(132, 162, 210, 0.16);
+    border-bottom-right-radius: 10px;
+}
+QSpinBox::up-arrow {
+    width: 10px;
+    height: 10px;
+}
+QSpinBox::down-arrow {
+    width: 10px;
+    height: 10px;
+}
+QComboBox:hover, QSpinBox:hover, QLineEdit:hover {
+    border-color: rgba(92, 145, 224, 0.52);
+}
+QComboBox:focus, QSpinBox:focus, QLineEdit:focus {
+    border: 1px solid rgba(76, 137, 226, 0.78);
+}
 QHeaderView::section {
     background: rgba(241, 246, 255, 0.98);
     color: #5676a1;
@@ -117,3 +177,27 @@ QFrame[panel="true"] {
     border-radius: 16px;
 }
 """
+
+
+def _asset_url(filename: str) -> str:
+    return (Path(__file__).resolve().parents[1] / "assets" / filename).as_posix()
+
+
+def build_app_qss() -> str:
+    combo_arrow = _asset_url("combo-arrow-down.svg")
+    spin_up_arrow = _asset_url("spin-arrow-up.svg")
+    spin_down_arrow = _asset_url("spin-arrow-down.svg")
+    return (
+        APP_QSS
+        + f"""
+QComboBox::down-arrow {{
+    image: url("{combo_arrow}");
+}}
+QSpinBox::up-arrow {{
+    image: url("{spin_up_arrow}");
+}}
+QSpinBox::down-arrow {{
+    image: url("{spin_down_arrow}");
+}}
+"""
+    )

@@ -54,7 +54,7 @@ from meshsemantics.ui.file_panel import FilePanel
 from meshsemantics.ui.landmark_panel import LandmarkPanel
 from meshsemantics.ui.label_panel import LabelPanel
 from meshsemantics.ui.panel_dock import PanelDockWidget
-from meshsemantics.ui.style import APP_QSS
+from meshsemantics.ui.style import build_app_qss
 from meshsemantics.ui.vedo_widget import VedoWidget
 
 
@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
         self.resize(int(width), int(height))
         self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self.setAcceptDrops(True)
-        self.setStyleSheet(APP_QSS)
+        self.setStyleSheet(build_app_qss())
         self.setCentralWidget(self.vedo_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.panel_dock)

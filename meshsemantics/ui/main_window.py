@@ -1052,7 +1052,7 @@ class MainWindow(QMainWindow):
         label = int(self.label_engine.label_array[cell_id])
         if label <= 0:
             return
-        self.label_panel.label_spin.setValue(label)
+        self.label_panel.set_current_label(label, sync_remap_source=True)
 
     def _add_landmark(self, name: str) -> None:
         landmark_name = name.strip() or f"Landmark {len(self.landmarks) + 1}"
@@ -1525,14 +1525,14 @@ class MainWindow(QMainWindow):
     def _sync_floating_action_buttons(self) -> None:
         if not hasattr(self, "floating_previous_model_button"):
             return
-        enabled = self.current_path is not None
         busy = self.file_panel.progress.isVisible()
+        has_current = self.current_path is not None
         has_previous = self.file_panel.has_previous_model()
         has_next = self.file_panel.has_next_model()
-        self.floating_previous_model_button.setEnabled(enabled and not busy and has_previous)
-        self.floating_next_model_button.setEnabled(enabled and not busy and has_next)
-        self.floating_quick_save_button.setEnabled(enabled and not busy)
-        self.floating_complete_checkbox.setEnabled(enabled and not busy)
+        self.floating_previous_model_button.setEnabled(has_current and not busy and has_previous)
+        self.floating_next_model_button.setEnabled(not busy and has_next)
+        self.floating_quick_save_button.setEnabled(has_current and not busy)
+        self.floating_complete_checkbox.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setVisible(self.currentPanel == "label")
         self._position_floating_action_bar()
 

@@ -296,6 +296,14 @@ class LabelPanel(QWidget):
         self.overwrite_checkbox.setChecked(bool(enabled))
         self.overwrite_checkbox.blockSignals(False)
 
+    def set_current_label(self, label: int, sync_remap_source: bool = True) -> None:
+        label = int(label)
+        self.label_spin.setValue(label)
+        if sync_remap_source:
+            self.swap_a.blockSignals(True)
+            self.swap_a.setValue(label)
+            self.swap_a.blockSignals(False)
+
     def _asset_url(self, filename: str) -> str:
         path = Path(__file__).resolve().parents[1] / "assets" / filename
         return path.as_posix()
@@ -385,6 +393,9 @@ class LabelPanel(QWidget):
 
     def _on_label_value_changed(self, value: int) -> None:
         self._select_row_for_label(value)
+        self.swap_a.blockSignals(True)
+        self.swap_a.setValue(int(value))
+        self.swap_a.blockSignals(False)
         self._refresh_chip()
         self.label_changed.emit(value)
 
@@ -407,6 +418,9 @@ class LabelPanel(QWidget):
         self.label_spin.blockSignals(True)
         self.label_spin.setValue(label)
         self.label_spin.blockSignals(False)
+        self.swap_a.blockSignals(True)
+        self.swap_a.setValue(label)
+        self.swap_a.blockSignals(False)
         self._refresh_chip()
         self.label_changed.emit(label)
 

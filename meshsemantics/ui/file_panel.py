@@ -176,6 +176,16 @@ class FileTableModel(QAbstractTableModel):
             return entry.work_path
         return None
 
+    def first_incomplete_path(self) -> str | None:
+        if self._project is None:
+            return None
+        for entry_row in self._visible_entry_rows:
+            entry = self._project.entries[entry_row]
+            if self._status_for_entry(entry.work_path) == STATUS_COMPLETED:
+                continue
+            return entry.work_path
+        return None
+
     def previous_path_before(self, path: str | None = None) -> str | None:
         if self._project is None or not self._visible_entry_rows:
             return None
@@ -538,13 +548,19 @@ class FilePanel(QDockWidget):
         self.next_model_button.setEnabled(not busy and self._has_next_model())
 
     def _has_next_model(self) -> bool:
-        return self.model.next_incomplete_path_after(self.selected_path()) is not None
+        selected_path = self.selected_path()
+        if selected_path:
+            return self.model.next_incomplete_path_after(selected_path) is not None
+        return self.model.first_incomplete_path() is not None
 
     def has_previous_model(self) -> bool:
         return self.model.previous_path_before(self.selected_path()) is not None
 
     def has_next_model(self) -> bool:
-        return self.model.next_incomplete_path_after(self.selected_path()) is not None
+        selected_path = self.selected_path()
+        if selected_path:
+            return self.model.next_incomplete_path_after(selected_path) is not None
+        return self.model.first_incomplete_path() is not None
 
     def open_previous_model(self) -> None:
         previous_path = self.model.previous_path_before(self.selected_path())
@@ -552,7 +568,11 @@ class FilePanel(QDockWidget):
             self.previous_model_requested.emit(previous_path)
 
     def _open_next_model(self) -> None:
-        next_path = self.model.next_incomplete_path_after(self.selected_path())
+        selected_path = self.selected_path()
+        if selected_path:
+            next_path = self.model.next_incomplete_path_after(selected_path)
+        else:
+            next_path = self.model.first_incomplete_path()
         if next_path is not None:
             self.next_model_requested.emit(next_path)
 

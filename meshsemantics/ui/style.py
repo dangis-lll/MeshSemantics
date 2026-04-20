@@ -55,6 +55,37 @@ QDockWidget::title {
     background: rgba(247, 250, 255, 0.98);
     border-bottom: 1px solid rgba(114, 151, 208, 0.16);
 }
+QTabWidget#panel-tabs {
+    background: transparent;
+}
+QTabWidget#panel-tabs::pane {
+    background: rgba(247, 250, 255, 0.98);
+    border: 1px solid rgba(132, 162, 210, 0.20);
+    border-top: none;
+    border-bottom-left-radius: 14px;
+    border-bottom-right-radius: 14px;
+    top: -1px;
+}
+QTabWidget#panel-tabs > QWidget {
+    background: transparent;
+}
+QTabBar::tab {
+    background: rgba(241, 246, 255, 0.98);
+    color: #5676a1;
+    border: 1px solid rgba(132, 162, 210, 0.20);
+    border-bottom: none;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    padding: 8px 14px;
+    margin-right: 4px;
+}
+QTabBar::tab:selected {
+    background: rgba(247, 250, 255, 0.98);
+    color: #21334d;
+}
+QTabBar::tab:!selected {
+    margin-top: 3px;
+}
 QLineEdit, QSpinBox, QComboBox, QTableWidget, QTableView, QTreeView, QProgressBar {
     background: rgba(255, 255, 255, 0.98);
     border: 1px solid rgba(132, 162, 210, 0.34);

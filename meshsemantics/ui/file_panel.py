@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QMenu,
     QSizePolicy,
     QTableView,
     QVBoxLayout,
@@ -175,6 +176,29 @@ class FileTableModel(QAbstractTableModel):
             return entry.work_path
         return None
 
+    def previous_path_before(self, path: str | None = None) -> str | None:
+        if self._project is None or not self._visible_entry_rows:
+            return None
+        start_path = path or self._current_path
+        if start_path:
+            start_row = self._visible_row_by_path.get(start_path, -1)
+        else:
+            start_row = len(self._visible_entry_rows)
+        for visible_row in range(start_row - 1, -1, -1):
+            entry_row = self._visible_entry_rows[visible_row]
+            return self._project.entries[entry_row].work_path
+        return None
+
+    def next_path_after(self, path: str | None = None) -> str | None:
+        if self._project is None or not self._visible_entry_rows:
+            return None
+        start_path = path or self._current_path
+        start_row = self._visible_row_by_path.get(start_path, -1) if start_path else -1
+        for visible_row in range(start_row + 1, len(self._visible_entry_rows)):
+            entry_row = self._visible_entry_rows[visible_row]
+            return self._project.entries[entry_row].work_path
+        return None
+
     def set_current_path(self, path: str | None) -> None:
         if path == self._current_path:
             return
@@ -275,6 +299,9 @@ class FileTableModel(QAbstractTableModel):
 
 class FilePanel(QDockWidget):
     open_requested = pyqtSignal(str)
+    remove_requested = pyqtSignal(str)
+    delete_local_requested = pyqtSignal(str)
+    previous_model_requested = pyqtSignal(str)
     next_model_requested = pyqtSignal(str)
 
     def __init__(self, cache_limit: int = 20, parent=None) -> None:
@@ -330,7 +357,7 @@ class FilePanel(QDockWidget):
         self.project_label.setMinimumWidth(0)
         self.summary_label = QLabel("")
         self.summary_label.setProperty("role", "caption")
-        self.next_model_button = QPushButton("Next To Do")
+        self.next_model_button = QPushButton("Next Model")
         action_row.addWidget(self.project_label, 1)
         action_row.addWidget(self.summary_label)
         action_row.addWidget(self.next_model_button)
@@ -353,6 +380,8 @@ class FilePanel(QDockWidget):
         self.table.horizontalHeader().resizeSection(2, 170)
         self.table.doubleClicked.connect(self._emit_selected)
         self.table.selectionModel().selectionChanged.connect(self._sync_buttons)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
 
         self.progress_label = QLabel("")
         self.progress_label.setProperty("role", "caption")
@@ -471,6 +500,24 @@ class FilePanel(QDockWidget):
         if path is not None:
             self.open_requested.emit(path)
 
+    def _show_context_menu(self, position) -> None:
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+        self.table.selectRow(index.row())
+        path = self.model.file_path_at(index.row())
+        if path is None:
+            return
+
+        menu = QMenu(self.table)
+        remove_action = menu.addAction("Remove From List")
+        delete_action = menu.addAction("Delete Local File")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(position))
+        if chosen == remove_action:
+            self.remove_requested.emit(path)
+        elif chosen == delete_action:
+            self.delete_local_requested.emit(path)
+
     def _restore_selection(self, selected_path: str | None) -> None:
         if not selected_path:
             self.table.clearSelection()
@@ -492,6 +539,17 @@ class FilePanel(QDockWidget):
 
     def _has_next_model(self) -> bool:
         return self.model.next_incomplete_path_after(self.selected_path()) is not None
+
+    def has_previous_model(self) -> bool:
+        return self.model.previous_path_before(self.selected_path()) is not None
+
+    def has_next_model(self) -> bool:
+        return self.model.next_incomplete_path_after(self.selected_path()) is not None
+
+    def open_previous_model(self) -> None:
+        previous_path = self.model.previous_path_before(self.selected_path())
+        if previous_path is not None:
+            self.previous_model_requested.emit(previous_path)
 
     def _open_next_model(self) -> None:
         next_path = self.model.next_incomplete_path_after(self.selected_path())

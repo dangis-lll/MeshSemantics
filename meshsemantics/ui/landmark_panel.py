@@ -29,7 +29,6 @@ class LandmarkPanel(QWidget):
     pick_requested = pyqtSignal(int)
     save_requested = pyqtSignal()
     import_requested = pyqtSignal()
-    export_requested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -115,12 +114,8 @@ class LandmarkPanel(QWidget):
         footer.setSpacing(8)
         self.import_button = QPushButton("Import JSON")
         self.import_button.clicked.connect(self.import_requested.emit)
-        self.export_button = QPushButton("Export JSON")
-        self.export_button.clicked.connect(self.export_requested.emit)
         self.import_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.export_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         footer.addWidget(self.import_button)
-        footer.addWidget(self.export_button)
 
         outer.addWidget(top)
         outer.addWidget(table_frame, 1)
@@ -136,7 +131,6 @@ class LandmarkPanel(QWidget):
             self.table,
             self.table.viewport(),
             self.import_button,
-            self.export_button,
         ]
         for widget in self._activation_widgets:
             widget.installEventFilter(self)
@@ -269,7 +263,6 @@ class LandmarkPanel(QWidget):
         self.rename_button.setEnabled(has_selection)
         self.delete_button.setEnabled(has_selection)
         self.pick_button.setEnabled(has_selection)
-        self.export_button.setEnabled(self.table.rowCount() > 0)
 
     def eventFilter(self, watched, event) -> bool:
         if watched in self._activation_widgets and event.type() in {

@@ -8,7 +8,7 @@ class PanelDockWidget(QDockWidget):
     current_panel_changed = pyqtSignal(str)
 
     def __init__(self, label_panel, landmark_panel, parent=None) -> None:
-        super().__init__("Panels", parent)
+        super().__init__("Workbench", parent)
         self.setObjectName("panel-dock")
         self.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable

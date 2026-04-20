@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -59,12 +60,8 @@ from meshsemantics.ui.vedo_widget import VedoWidget
 
 @dataclass
 class HistoryRecord:
-    labels_before: np.ndarray
-    labels_after: np.ndarray
-    ui_before: dict
-    ui_after: dict
-    dirty_before: bool
-    dirty_after: bool
+    state_before: dict
+    state_after: dict
 
 
 @dataclass
@@ -192,8 +189,15 @@ class MainWindow(QMainWindow):
         self.label_panel.quick_save_button.hide()
         self.label_panel.complete_checkbox.hide()
 
-        self.floating_next_todo_button = QPushButton("Next To Do", self.vedo_widget)
-        self.floating_next_todo_button.clicked.connect(self.file_panel._open_next_model)
+        self.floating_previous_model_button = QPushButton(self.vedo_widget)
+        self.floating_previous_model_button.setIcon(self._create_arrow_icon(direction="left"))
+        self.floating_previous_model_button.setToolTip("Previous Model")
+        self.floating_previous_model_button.clicked.connect(self.file_panel.open_previous_model)
+
+        self.floating_next_model_button = QPushButton(self.vedo_widget)
+        self.floating_next_model_button.setIcon(self._create_arrow_icon(direction="right"))
+        self.floating_next_model_button.setToolTip("Next Model")
+        self.floating_next_model_button.clicked.connect(self.file_panel._open_next_model)
 
         self.floating_quick_save_button = QPushButton("Quick Save", self.vedo_widget)
         self.floating_quick_save_button.clicked.connect(self.quick_save_current)
@@ -208,30 +212,34 @@ class MainWindow(QMainWindow):
         self._position_floating_action_bar()
 
     def _position_floating_action_bar(self) -> None:
-        if not hasattr(self, "floating_next_todo_button"):
+        if not hasattr(self, "floating_previous_model_button"):
             return
         margin = 20
         spacing = 8
 
         controls = [
-            self.floating_next_todo_button,
+            self.floating_previous_model_button,
+            self.floating_next_model_button,
             self.floating_quick_save_button,
             self.floating_complete_checkbox,
         ]
+        visible_controls = [control for control in controls if control.isVisible()]
+        if not visible_controls:
+            return
         widths = []
         height = 0
-        for control in controls:
+        for control in visible_controls:
             hint = control.sizeHint()
             control.resize(hint)
             widths.append(hint.width())
             height = max(height, hint.height())
 
-        total_width = sum(widths) + spacing * (len(controls) - 1)
+        total_width = sum(widths) + spacing * (len(visible_controls) - 1)
         x = max(margin, self.vedo_widget.width() - total_width - margin)
         y = max(margin, self.vedo_widget.height() - height - margin)
 
         cursor_x = x
-        for control, width in zip(controls, widths):
+        for control, width in zip(visible_controls, widths):
             control.move(cursor_x, y)
             control.raise_()
             cursor_x += width + spacing
@@ -257,40 +265,22 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self.open_folder_dialog)
         import_json = QAction("Import Segment", self)
         import_json.triggered.connect(self.import_labels_json_dialog)
-        labels_panel_action = QAction("Labels", self)
-        labels_panel_action.triggered.connect(self._show_label_panel)
-        landmarks_panel_action = QAction("Landmarks", self)
-        landmarks_panel_action.triggered.connect(self._show_landmark_panel)
         save_action = QAction("Save As", self)
         save_action.triggered.connect(self.save_current)
-        clear_selection_action = QAction("Clear Selection", self)
+        clear_selection_action = QAction("Clear", self)
         clear_selection_action.triggered.connect(self.clear_current_model_selection)
-        undo_action = QAction(self._create_arrow_icon(direction="left"), "", self)
-        undo_action.setToolTip("Undo")
-        undo_action.triggered.connect(self.undo)
-        redo_action = QAction(self._create_arrow_icon(direction="right"), "", self)
-        redo_action.setToolTip("Redo")
-        redo_action.triggered.connect(self.redo)
 
         self.import_json_action = import_json
         self.clear_selection_action = clear_selection_action
         self.import_json_action.setEnabled(False)
         self.clear_selection_action.setEnabled(False)
 
-        for action in [open_file, open_dir, import_json, labels_panel_action, landmarks_panel_action, save_action, clear_selection_action]:
+        for action in [open_file, open_dir, import_json, save_action, clear_selection_action]:
             toolbar.addAction(action)
 
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
-
-        for action in [undo_action, redo_action]:
-            toolbar.addAction(action)
-
-        self._sync_toolbar_icon_button_size(toolbar, save_action, undo_action)
-        self._sync_toolbar_icon_button_size(toolbar, save_action, redo_action)
-        self._style_toolbar_icon_button(toolbar, undo_action, "undo-button")
-        self._style_toolbar_icon_button(toolbar, redo_action, "redo-button")
 
     def _bind_signals(self) -> None:
         app = QApplication.instance()
@@ -298,6 +288,9 @@ class MainWindow(QMainWindow):
             app.focusChanged.connect(lambda *_: self._refresh_shortcut_bindings())
 
         self.file_panel.open_requested.connect(self.load_mesh)
+        self.file_panel.remove_requested.connect(self._remove_file_from_list)
+        self.file_panel.delete_local_requested.connect(self._delete_local_file_from_list)
+        self.file_panel.previous_model_requested.connect(self.load_mesh)
         self.file_panel.next_model_requested.connect(self.load_mesh)
 
         self.label_panel.colormap_changed.connect(self._on_colormap_changed)
@@ -314,7 +307,6 @@ class MainWindow(QMainWindow):
         self.landmark_panel.pick_requested.connect(self._begin_landmark_pick)
         self.landmark_panel.save_requested.connect(self.quick_save_landmarks)
         self.landmark_panel.import_requested.connect(self.import_landmarks_json_dialog)
-        self.landmark_panel.export_requested.connect(self.export_landmarks_json_dialog)
         self.landmark_panel.panel_activated.connect(lambda: self.setcurrentpanel("landmark"))
         self.panel_dock.current_panel_changed.connect(self.setcurrentpanel)
 
@@ -330,6 +322,8 @@ class MainWindow(QMainWindow):
 
     def _bind_shortcuts(self) -> None:
         self._shortcut_bindings.clear()
+        self._register_shortcut("B", self, {"label", "landmark"}, self.file_panel.open_previous_model, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("N", self, {"label", "landmark"}, self.file_panel._open_next_model, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("Ctrl+S", self, {"label"}, self.quick_save_current)
         self._register_shortcut("Ctrl+Shift+S", self, {"label"}, self.save_current)
         self._register_shortcut("S", self, {"label"}, self.interactor.begin_spline, enabled_when=self._shortcut_can_use_plain_action)
@@ -368,7 +362,7 @@ class MainWindow(QMainWindow):
             enabled_when=self._shortcut_can_use_enter,
         )
         self._register_shortcut("Ctrl+S", self, {"landmark"}, self.quick_save_landmarks)
-        self._register_shortcut("Ctrl+Shift+S", self, {"landmark"}, self.export_landmarks_json_dialog)
+        self._register_shortcut("Ctrl+Shift+S", self, {"landmark"}, self.save_current)
         self._register_shortcut(
             Qt.Key.Key_Delete,
             self,
@@ -412,6 +406,7 @@ class MainWindow(QMainWindow):
         self.currentPanel = panel
         self.interactor.set_interaction_context(panel)
         self._refresh_shortcut_bindings()
+        self._sync_floating_action_buttons()
         if self._syncing_current_panel:
             return
         self._syncing_current_panel = True
@@ -464,6 +459,59 @@ class MainWindow(QMainWindow):
             self._prompt_landmark_name_for_position(position)
             return
         self._select_label_for_cell(cell_id)
+
+    def _remove_file_from_list(self, file_path: str) -> None:
+        entry = self._project_entry_for_path(file_path)
+        if entry is None:
+            return
+        target_name = Path(file_path).name
+        reply = QMessageBox.question(
+            self,
+            "Remove From List",
+            f"Remove {target_name} from the task list only?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if not self._confirm_remove_project_entry(entry):
+            return
+        self._remove_project_entry(entry)
+        self.statusBar().showMessage(f"Removed {target_name} from the task list")
+
+    def _delete_local_file_from_list(self, file_path: str) -> None:
+        entry = self._project_entry_for_path(file_path)
+        if entry is None:
+            return
+        target_path = Path(file_path)
+        target_name = target_path.name
+        reply = QMessageBox.question(
+            self,
+            "Delete Local File",
+            f"Delete {target_name} from disk and remove it from the task list?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if not self._confirm_remove_project_entry(entry):
+            return
+        try:
+            if target_path.exists():
+                target_path.unlink()
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", f"Failed to delete file:\n{target_path}\n\n{exc}")
+            return
+        self._remove_project_entry(entry)
+        self.statusBar().showMessage(f"Deleted {target_name} and removed it from the task list")
+
+    def _confirm_remove_project_entry(self, entry) -> bool:
+        current_path = normalize_path(self.current_path)
+        entry_work = normalize_path(entry.work_path)
+        entry_source = normalize_path(entry.source_path)
+        if current_path is not None and current_path in {entry_work, entry_source}:
+            return self._confirm_save_if_dirty()
+        return True
 
     def _prompt_landmark_name_for_position(self, position) -> None:
         if self.vedo_widget.mesh is None:
@@ -551,9 +599,9 @@ class MainWindow(QMainWindow):
         self._set_last_open_dir(Path(file_path).parent)
         self._import_landmarks_json(file_path)
 
-    def export_landmarks_json_dialog(self) -> None:
+    def export_landmarks_json_dialog(self) -> bool:
         if self.vedo_widget.mesh is None:
-            return
+            return False
         target, _ = QFileDialog.getSaveFileName(
             self,
             "Export Landmark JSON",
@@ -561,8 +609,8 @@ class MainWindow(QMainWindow):
             "JSON (*.json)",
         )
         if not target:
-            return
-        self._save_landmarks_to_path(target)
+            return False
+        return self._save_landmarks_to_path(target)
 
     def open_project(self, folder: str | Path, preferred_path: str | Path | None = None, auto_load: bool = True) -> None:
         normalized_folder = normalize_path(folder)
@@ -771,6 +819,8 @@ class MainWindow(QMainWindow):
     def save_current(self) -> bool:
         if self.vedo_widget.mesh is None:
             return False
+        if self.currentPanel == "landmark":
+            return self.export_landmarks_json_dialog()
         default_base = Path(self.current_path or self._default_vtp_target())
         default_path = str(default_base.with_suffix(".vtp"))
         target, selected_filter = QFileDialog.getSaveFileName(
@@ -843,7 +893,7 @@ class MainWindow(QMainWindow):
     def _import_labels_json(self, file_path: str | Path) -> bool:
         if self.vedo_widget.mesh is None:
             return False
-        before_labels, before_ui, dirty_before = self._capture_history_state()
+        before_state = self._capture_history_state()
         try:
             labels = FileIO.load_labels_json(file_path, expected_cell_count=self.label_engine.size)
         except Exception as exc:
@@ -859,7 +909,7 @@ class MainWindow(QMainWindow):
         self.label_engine.reset(labels)
         self.label_panel.ensure_labels(self.label_engine.unique_labels())
         self.is_dirty = True
-        self._push_history(before_labels, before_ui, dirty_before)
+        self._push_history(before_state)
         self._update_mesh_view()
         self._update_current_status_after_edit()
         self.statusBar().showMessage(f"Imported labels from {Path(file_path).name}")
@@ -868,6 +918,7 @@ class MainWindow(QMainWindow):
     def _import_landmarks_json(self, file_path: str | Path) -> bool:
         if self.vedo_widget.mesh is None:
             return False
+        before_state = self._capture_history_state()
         try:
             landmarks = FileIO.load_landmarks_json(file_path)
         except Exception as exc:
@@ -882,6 +933,7 @@ class MainWindow(QMainWindow):
         self.active_landmark_index = 0 if self.landmarks else -1
         self.landmark_dirty = False
         self.landmark_panel.set_pick_mode(False)
+        self._push_history(before_state)
         self._update_landmark_view()
         self.statusBar().showMessage(f"Imported landmarks from {Path(file_path).name}")
         return True
@@ -913,25 +965,25 @@ class MainWindow(QMainWindow):
     def _friendly_landmark_import_error(self, error: Exception) -> str:
         code = str(error).strip()
         if code in {"missing_landmarks", "invalid_count", "invalid_json", "invalid_landmark"}:
-            return "这个特征点 JSON 格式不正确，无法导入。"
-        return "导入特征点失败，请检查 JSON 文件内容。"
+            return "这个特征点文件格式不正确，无法导入。"
+        return "导入特征点失败，请检查文件内容和格式。"
 
     def undo(self) -> None:
         if not self.undo_history:
             return
         record = self.undo_history.pop()
         self.redo_history.append(record)
-        self._restore_history_state(record.labels_before, record.ui_before, record.dirty_before)
+        self._restore_history_state(record.state_before)
 
     def redo(self) -> None:
         if not self.redo_history:
             return
         record = self.redo_history.pop()
         self.undo_history.append(record)
-        self._restore_history_state(record.labels_after, record.ui_after, record.dirty_after)
+        self._restore_history_state(record.state_after)
 
     def _apply_cells(self, cell_ids) -> None:
-        before_labels, before_ui, dirty_before = self._capture_history_state()
+        before_state = self._capture_history_state()
         overwrite_existing = self.label_panel.overwrite_existing_labels()
         raw_ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
         assignable_ids = self.label_engine.assignable_cells(
@@ -940,7 +992,7 @@ class MainWindow(QMainWindow):
         )
         if self.label_engine.assign(assignable_ids, self.label_panel.current_label(), overwrite_existing=True):
             self.is_dirty = True
-            self._push_history(before_labels, before_ui, dirty_before)
+            self._push_history(before_state)
             self._update_mesh_view()
             self._update_current_status_after_edit()
             skipped_count = max(0, int(raw_ids.size) - int(assignable_ids.size))
@@ -953,10 +1005,10 @@ class MainWindow(QMainWindow):
         self.interactor.clear_preview()
 
     def _remap_labels(self, source: int, target: int) -> None:
-        before_labels, before_ui, dirty_before = self._capture_history_state()
+        before_state = self._capture_history_state()
         if self.label_engine.remap_label(source, target):
             self.is_dirty = True
-            self._push_history(before_labels, before_ui, dirty_before)
+            self._push_history(before_state)
             self._update_mesh_view()
             self._update_current_status_after_edit()
             self.statusBar().showMessage(f"Remapped label {source} to {target}")
@@ -964,7 +1016,7 @@ class MainWindow(QMainWindow):
     def _delete_label(self, label: int) -> None:
         if label <= 0:
             return
-        before_labels, before_ui, dirty_before = self._capture_history_state()
+        before_state = self._capture_history_state()
         has_cells = self.vedo_widget.mesh is not None and label in set(self.label_engine.unique_labels())
         if has_cells:
             reply = QMessageBox.question(
@@ -980,7 +1032,7 @@ class MainWindow(QMainWindow):
             self.is_dirty = True
         if not self.label_panel.remove_label(label):
             return
-        self._push_history(before_labels, before_ui, dirty_before)
+        self._push_history(before_state)
         self._update_mesh_view()
         self._update_current_status_after_edit()
         self.statusBar().showMessage(f"Deleted label {label}")
@@ -1014,10 +1066,12 @@ class MainWindow(QMainWindow):
             self.landmark_panel.focus_name_input(clear=False)
             self.statusBar().showMessage(f"Selected existing landmark {self.landmarks[existing_index].get('name', landmark_name)}")
             return
+        before_state = self._capture_history_state()
         self.landmark_panel.preserve_input_text_once()
         self.landmarks.append({"name": landmark_name, "position": None})
         self.active_landmark_index = len(self.landmarks) - 1
         self.landmark_dirty = True
+        self._push_history(before_state)
         self._show_landmark_panel()
         self._update_landmark_view()
         self.landmark_panel.select_row(self.active_landmark_index, update_input=False)
@@ -1028,10 +1082,12 @@ class MainWindow(QMainWindow):
         landmark_name = name.strip() or f"Landmark {len(self.landmarks) + 1}"
         coords = tuple(float(value) for value in position)
         existing_index = self._find_landmark_index_by_name(landmark_name)
+        before_state = self._capture_history_state()
         if existing_index >= 0:
             self.active_landmark_index = existing_index
             self.landmarks[existing_index]["position"] = coords
             self.landmark_dirty = True
+            self._push_history(before_state)
             self.landmark_panel.preserve_input_text_once()
             self._show_landmark_panel()
             self._update_landmark_view()
@@ -1044,6 +1100,7 @@ class MainWindow(QMainWindow):
         self.landmarks.append({"name": landmark_name, "position": coords})
         self.active_landmark_index = len(self.landmarks) - 1
         self.landmark_dirty = True
+        self._push_history(before_state)
         self.landmark_panel.preserve_input_text_once()
         self._show_landmark_panel()
         self._update_landmark_view()
@@ -1055,8 +1112,10 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self.landmarks):
             return
         landmark_name = name.strip() or f"Landmark {index + 1}"
+        before_state = self._capture_history_state()
         self.landmarks[index]["name"] = landmark_name
         self.landmark_dirty = True
+        self._push_history(before_state)
         self._update_landmark_view()
         self.statusBar().showMessage(f"Renamed landmark to {landmark_name}")
 
@@ -1064,6 +1123,7 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self.landmarks):
             return
         landmark_name = str(self.landmarks[index].get("name") or f"Landmark {index + 1}")
+        before_state = self._capture_history_state()
         del self.landmarks[index]
         if not self.landmarks:
             self.active_landmark_index = -1
@@ -1072,6 +1132,7 @@ class MainWindow(QMainWindow):
         self.landmark_dirty = True
         self.interactor.clear_preview(emit_preview=False)
         self.landmark_panel.set_pick_mode(False)
+        self._push_history(before_state)
         self._update_landmark_view()
         self.statusBar().showMessage(f"Deleted landmark {landmark_name}")
 
@@ -1095,10 +1156,12 @@ class MainWindow(QMainWindow):
     def _apply_landmark_pick(self, position) -> None:
         if self.active_landmark_index < 0 or self.active_landmark_index >= len(self.landmarks):
             return
+        before_state = self._capture_history_state()
         coords = tuple(float(value) for value in position)
         self.landmarks[self.active_landmark_index]["position"] = coords
         self.landmark_dirty = True
         self.landmark_panel.set_pick_mode(False)
+        self._push_history(before_state)
         self._update_landmark_view()
         self.statusBar().showMessage(
             f"Updated landmark {self.landmarks[self.active_landmark_index].get('name', self.active_landmark_index + 1)}"
@@ -1236,21 +1299,20 @@ class MainWindow(QMainWindow):
             return Path(self.current_path).with_suffix(".landmarks.json")
         return Path(self.last_open_dir) / "mesh.landmarks.json"
 
-    def _capture_history_state(self) -> tuple[np.ndarray, dict, bool]:
-        return (
-            self.label_engine.label_array.copy(),
-            self.label_panel.snapshot_state(),
-            bool(self.is_dirty),
-        )
+    def _capture_history_state(self) -> dict:
+        return {
+            "labels": self.label_engine.label_array.copy(),
+            "label_ui": self.label_panel.snapshot_state(),
+            "is_dirty": bool(self.is_dirty),
+            "landmarks": deepcopy(self.landmarks),
+            "active_landmark_index": int(self.active_landmark_index),
+            "landmark_dirty": bool(self.landmark_dirty),
+        }
 
-    def _push_history(self, before_labels: np.ndarray, before_ui: dict, dirty_before: bool) -> None:
+    def _push_history(self, before_state: dict) -> None:
         record = HistoryRecord(
-            labels_before=np.asarray(before_labels, dtype=np.int32).copy(),
-            labels_after=self.label_engine.label_array.copy(),
-            ui_before=before_ui,
-            ui_after=self.label_panel.snapshot_state(),
-            dirty_before=dirty_before,
-            dirty_after=bool(self.is_dirty),
+            state_before=before_state,
+            state_after=self._capture_history_state(),
         )
         self.undo_history.append(record)
         undo_limit = max(1, int(self.settings.get("undo_limit", 50)))
@@ -1258,14 +1320,20 @@ class MainWindow(QMainWindow):
             self.undo_history.pop(0)
         self.redo_history.clear()
 
-    def _restore_history_state(self, labels: np.ndarray, ui_state: dict, dirty: bool) -> None:
-        self.label_engine.label_array = np.asarray(labels, dtype=np.int32).copy()
-        self.label_panel.restore_state(ui_state)
+    def _restore_history_state(self, state: dict) -> None:
+        self.interactor.clear_preview(emit_preview=False)
+        self.label_engine.label_array = np.asarray(state.get("labels", np.zeros(0, dtype=np.int32)), dtype=np.int32).copy()
+        self.label_panel.restore_state(state.get("label_ui", {}))
         self.colormap = self.label_panel.colormap()
         save_colormap(self.colormap)
         self.vedo_widget.set_colormap(self.colormap)
+        self.landmarks = deepcopy(state.get("landmarks", []))
+        self.active_landmark_index = int(state.get("active_landmark_index", -1))
+        self.landmark_dirty = bool(state.get("landmark_dirty", False))
+        self.landmark_panel.set_pick_mode(False)
         self._update_mesh_view()
-        self.is_dirty = bool(dirty)
+        self._update_landmark_view()
+        self.is_dirty = bool(state.get("is_dirty", False))
         self._update_current_status_after_edit()
 
     def _update_mesh_view(self) -> None:
@@ -1455,14 +1523,17 @@ class MainWindow(QMainWindow):
         self._sync_floating_action_buttons()
 
     def _sync_floating_action_buttons(self) -> None:
-        if not hasattr(self, "floating_next_todo_button"):
+        if not hasattr(self, "floating_previous_model_button"):
             return
         enabled = self.current_path is not None
         busy = self.file_panel.progress.isVisible()
-        has_next = self.file_panel.model.next_incomplete_path_after(self.file_panel.selected_path()) is not None
+        has_previous = self.file_panel.has_previous_model()
+        has_next = self.file_panel.has_next_model()
+        self.floating_previous_model_button.setEnabled(enabled and not busy and has_previous)
+        self.floating_next_model_button.setEnabled(enabled and not busy and has_next)
         self.floating_quick_save_button.setEnabled(enabled and not busy)
         self.floating_complete_checkbox.setEnabled(enabled and not busy)
-        self.floating_next_todo_button.setEnabled(not busy and has_next)
+        self.floating_complete_checkbox.setVisible(self.currentPanel == "label")
         self._position_floating_action_bar()
 
     def _replace_current_project_entry(self, previous_path: str | None, next_path: str, status: str) -> None:
@@ -1623,6 +1694,9 @@ class MainWindow(QMainWindow):
         entries = [candidate for candidate in self.project_dataset.entries if candidate != entry]
         work_path = normalize_path(entry.work_path)
         source_path = normalize_path(entry.source_path)
+        removed_current = self.current_path is not None and (
+            normalize_path(self.current_path) == work_path or normalize_path(self.current_path) == source_path
+        )
         if work_path:
             self._project_status_by_work_path.pop(work_path, None)
             relative_key = self._relative_status_key(work_path)
@@ -1631,9 +1705,7 @@ class MainWindow(QMainWindow):
         if source_path and source_path != work_path:
             self._project_status_by_work_path.pop(source_path, None)
         current_path = self.current_path
-        if current_path is not None and (
-            normalize_path(current_path) == work_path or normalize_path(current_path) == source_path
-        ):
+        if removed_current:
             current_path = None
         next_open_path = compute_next_open_path(
             ProjectDataset(
@@ -1655,6 +1727,8 @@ class MainWindow(QMainWindow):
         )
         self.file_panel.set_project(self.project_dataset)
         self.file_panel.set_current_path(current_path)
+        if removed_current:
+            self._clear_loaded_mesh()
         self._refresh_completion_action()
 
     def _restore_last_project(self) -> None:

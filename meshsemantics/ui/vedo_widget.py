@@ -9,8 +9,18 @@ from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 from vtkmodules.vtkCommonCore import vtkLookupTable
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
+try:
+    from vtkmodules.qt.QVTKOpenGLNativeWidget import QVTKOpenGLNativeWidget
+    from vtkmodules.vtkRenderingOpenGL2 import vtkGenericOpenGLRenderWindow
 
-class MeshSemanticsVTKCanvas(QVTKRenderWindowInteractor):
+    _HAS_QVTK_OPENGL_NATIVE_WIDGET = True
+except ImportError:
+    QVTKOpenGLNativeWidget = None
+    vtkGenericOpenGLRenderWindow = None
+    _HAS_QVTK_OPENGL_NATIVE_WIDGET = False
+
+
+class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):
     _ALLOWED_PLAIN_KEYS = {
         Qt.Key.Key_S,
         Qt.Key.Key_E,
@@ -63,6 +73,46 @@ class MeshSemanticsVTKCanvas(QVTKRenderWindowInteractor):
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+
+if _HAS_QVTK_OPENGL_NATIVE_WIDGET:
+    class MeshSemanticsVTKCanvas(QVTKOpenGLNativeWidget):
+        _ALLOWED_PLAIN_KEYS = _MeshSemanticsInteractorCanvas._ALLOWED_PLAIN_KEYS
+        _ALLOWED_CTRL_KEYS = _MeshSemanticsInteractorCanvas._ALLOWED_CTRL_KEYS
+
+        def __init__(self, parent=None) -> None:
+            super().__init__(parent)
+            self._render_window = vtkGenericOpenGLRenderWindow()
+            self.setRenderWindow(self._render_window)
+
+        def _should_block_key(self, event) -> bool:
+            return _MeshSemanticsInteractorCanvas._should_block_key(self, event)
+
+        def keyPressEvent(self, event) -> None:
+            if self._should_block_key(event):
+                event.accept()
+                return
+            super().keyPressEvent(event)
+
+        def keyReleaseEvent(self, event) -> None:
+            if self._should_block_key(event):
+                event.accept()
+                return
+            super().keyReleaseEvent(event)
+
+        # vedo expects the classic interactor widget API.
+        def GetRenderWindow(self):
+            return self.renderWindow()
+
+        def Initialize(self) -> None:
+            interactor = self.interactor()
+            if interactor is not None:
+                interactor.Initialize()
+
+        def Start(self) -> None:
+            return None
+else:
+    MeshSemanticsVTKCanvas = _MeshSemanticsInteractorCanvas
 
 
 class VedoWidget(QWidget):

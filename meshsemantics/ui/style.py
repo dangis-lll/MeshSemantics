@@ -10,6 +10,9 @@ QMainWindow, QWidget {
     font-family: "Microsoft YaHei UI";
     font-size: 12px;
 }
+QWidget#viewer_host, QWidget#floating_action_bar {
+    background: transparent;
+}
 QMenuBar, QStatusBar {
     background: rgba(248, 251, 255, 0.98);
     color: #355072;

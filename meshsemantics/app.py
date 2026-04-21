@@ -6,6 +6,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QSurfaceFormat
 
 from meshsemantics.ui.main_window import MainWindow
 
@@ -15,6 +16,13 @@ def build_app() -> QApplication:
         attr = getattr(Qt.ApplicationAttribute, attr_name, None)
         if attr is not None:
             QApplication.setAttribute(attr, True)
+    if hasattr(QSurfaceFormat, "setDefaultFormat"):
+        try:
+            from vtkmodules.qt.QVTKOpenGLNativeWidget import QVTKOpenGLNativeWidget
+
+            QSurfaceFormat.setDefaultFormat(QVTKOpenGLNativeWidget.defaultFormat())
+        except ImportError:
+            pass
     app = QApplication(sys.argv)
     app.setApplicationName("MeshSemantics")
     app.setOrganizationName("MeshSemantics")

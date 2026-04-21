@@ -31,7 +31,119 @@
      <number>0</number>
     </property>
     <item>
-     <widget class="QWidget" name="central_placeholder" native="true"/>
+     <widget class="QWidget" name="viewer_host">
+      <layout class="QVBoxLayout" name="viewer_layout">
+       <property name="spacing">
+        <number>0</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QWidget" name="central_placeholder" native="true"/>
+       </item>
+      </layout>
+      <widget class="QWidget" name="floating_action_bar">
+       <property name="geometry">
+        <rect>
+         <x>1090</x>
+         <y>870</y>
+         <width>410</width>
+         <height>56</height>
+        </rect>
+       </property>
+       <layout class="QHBoxLayout" name="floating_action_bar_layout">
+        <property name="spacing">
+         <number>8</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QPushButton" name="floating_previous_model_button">
+          <property name="minimumSize">
+           <size>
+            <width>56</width>
+            <height>40</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>64</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="floating_next_model_button">
+          <property name="minimumSize">
+           <size>
+            <width>56</width>
+            <height>40</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>64</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="text">
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="floating_quick_save_button">
+          <property name="minimumSize">
+           <size>
+            <width>116</width>
+            <height>40</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Quick Save</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="floating_complete_checkbox">
+          <property name="minimumSize">
+           <size>
+            <width>156</width>
+            <height>40</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Completed</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </widget>
     </item>
    </layout>
   </widget>

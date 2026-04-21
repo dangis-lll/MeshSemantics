@@ -12,7 +12,7 @@ import numpy as np
 
 from PyQt6 import uic
 from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRegion, QShortcut
+from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -110,6 +110,24 @@ class ProjectScanWorker(QObject):
         self.progress.emit(self.request_id, scanned_files, latest_path)
 
 
+class FloatingActionWindow(QWidget):
+    def __init__(self, owner: QWidget) -> None:
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        super().__init__(owner, flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -183,7 +201,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
     def _attach_central_widget(self) -> None:
-        layout = self.central_layout
+        layout = self.viewer_layout
         placeholder = self.central_placeholder
         index = layout.indexOf(placeholder)
         layout.insertWidget(index, self.vedo_widget)
@@ -191,91 +209,87 @@ class MainWindow(QMainWindow):
         placeholder.deleteLater()
 
     def _build_floating_action_bar(self) -> None:
-        self.floating_previous_model_button = QPushButton(self.vedo_widget)
-        self.floating_previous_model_button.setIcon(self._create_arrow_icon(direction="left"))
-        self.floating_previous_model_button.setToolTip("Previous Model")
-        self.floating_previous_model_button.clicked.connect(self.file_panel.open_previous_model)
-
-        self.floating_next_model_button = QPushButton(self.vedo_widget)
-        self.floating_next_model_button.setIcon(self._create_arrow_icon(direction="right"))
-        self.floating_next_model_button.setToolTip("Next Model")
-        self.floating_next_model_button.clicked.connect(self.file_panel._open_next_model)
-
-        self.floating_quick_save_button = QPushButton("Quick Save", self.vedo_widget)
-        self.floating_quick_save_button.clicked.connect(self.quick_save_current)
-
-        self.floating_complete_checkbox = QCheckBox("Completed", self.vedo_widget)
-        self.floating_complete_checkbox.setObjectName("floating-completion-toggle")
-        self.floating_complete_checkbox.setStyleSheet(
-            self.label_panel._completion_checkbox_qss().replace("completion-toggle", "floating-completion-toggle")
-        )
-        self.floating_complete_checkbox.clicked.connect(self.toggle_task_completed)
-        self.vedo_widget.installEventFilter(self)
+        self.floating_action_bar.hide()
+        self._floating_action_window = FloatingActionWindow(self)
+        floating_layout = self._floating_action_window.layout()
         for control in (
             self.floating_previous_model_button,
             self.floating_next_model_button,
             self.floating_quick_save_button,
             self.floating_complete_checkbox,
         ):
-            control.installEventFilter(self)
+            control.setParent(self._floating_action_window)
+            control.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            floating_layout.addWidget(control)
+
+        self.floating_previous_model_button.setIcon(self._create_arrow_icon(direction="left"))
+        self.floating_previous_model_button.setToolTip("Previous Model")
+        self.floating_previous_model_button.clicked.connect(self.file_panel.open_previous_model)
+
+        self.floating_next_model_button.setIcon(self._create_arrow_icon(direction="right"))
+        self.floating_next_model_button.setToolTip("Next Model")
+        self.floating_next_model_button.clicked.connect(self.file_panel._open_next_model)
+
+        self.floating_quick_save_button.clicked.connect(self.quick_save_current)
+
+        self.floating_complete_checkbox.setObjectName("floating-completion-toggle")
+        self.floating_complete_checkbox.setStyleSheet(
+            self.label_panel._completion_checkbox_qss().replace("completion-toggle", "floating-completion-toggle")
+        )
+        self.floating_complete_checkbox.clicked.connect(self.toggle_task_completed)
+        self.viewer_host.installEventFilter(self)
+        self.vedo_widget.installEventFilter(self)
         self._position_floating_action_bar()
 
-    def _update_floating_control_mask(self, control: QWidget) -> None:
-        rect = control.rect()
-        if rect.isEmpty():
-            return
-        path = QPainterPath()
-        path.addRoundedRect(float(rect.x()), float(rect.y()), float(rect.width()), float(rect.height()), 10.0, 10.0)
-        control.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
     def _position_floating_action_bar(self) -> None:
-        if not hasattr(self, "floating_previous_model_button"):
+        if not hasattr(self, "_floating_action_window"):
             return
         margin = 20
-        spacing = 8
-
-        controls = [
-            self.floating_previous_model_button,
-            self.floating_next_model_button,
-            self.floating_quick_save_button,
-            self.floating_complete_checkbox,
-        ]
-        visible_controls = [control for control in controls if control.isVisible()]
-        if not visible_controls:
+        bar = self._floating_action_window
+        host = self.vedo_widget
+        if (
+            not self.isVisible()
+            or self.windowState() & Qt.WindowState.WindowMinimized
+            or not host.isVisible()
+        ):
+            bar.hide()
             return
-        widths = []
-        height = 0
-        for control in visible_controls:
-            hint = control.sizeHint()
-            control.resize(hint)
-            widths.append(hint.width())
-            height = max(height, hint.height())
-
-        total_width = sum(widths) + spacing * (len(visible_controls) - 1)
-        x = max(margin, self.vedo_widget.width() - total_width - margin)
-        y = max(margin, self.vedo_widget.height() - height - margin)
-
-        cursor_x = x
-        for control, width in zip(visible_controls, widths):
-            control.move(cursor_x, y)
-            self._update_floating_control_mask(control)
-            control.raise_()
-            cursor_x += width + spacing
+        size = bar.sizeHint()
+        if not size.isValid():
+            bar.hide()
+            return
+        anchor = host.mapToGlobal(host.rect().bottomRight())
+        bar.adjustSize()
+        size = bar.size()
+        x = anchor.x() - size.width() - margin
+        y = anchor.y() - size.height() - margin
+        bar.move(x, y)
+        bar.show()
+        bar.raise_()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._position_floating_action_bar()
 
-    def eventFilter(self, watched: QObject, event) -> bool:
-        if watched is self.vedo_widget and event.type() == event.Type.Resize:
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._position_floating_action_bar()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_floating_action_bar()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == event.Type.WindowStateChange:
             self._position_floating_action_bar()
-        elif watched in {
-            getattr(self, "floating_previous_model_button", None),
-            getattr(self, "floating_next_model_button", None),
-            getattr(self, "floating_quick_save_button", None),
-            getattr(self, "floating_complete_checkbox", None),
-        } and event.type() in {event.Type.Resize, event.Type.Show}:
-            self._update_floating_control_mask(watched)
+
+    def eventFilter(self, watched: QObject, event) -> bool:
+        if watched in {
+            getattr(self, "viewer_host", None),
+            getattr(self, "vedo_widget", None),
+        } and event.type() in {event.Type.Resize, event.Type.Show, event.Type.Hide, event.Type.Move}:
+            self._position_floating_action_bar()
         return super().eventFilter(watched, event)
 
     def _build_toolbar(self) -> None:
@@ -820,6 +834,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_save_if_dirty():
             event.ignore()
             return
+        if hasattr(self, "_floating_action_window"):
+            self._floating_action_window.close()
         self.settings["window_size"] = [int(self.width()), int(self.height())]
         self.settings["last_open_dir"] = str(self.last_open_dir)
         self._persist_project_statuses()
@@ -1555,6 +1571,10 @@ class MainWindow(QMainWindow):
         self.floating_quick_save_button.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setVisible(self.currentPanel == "label")
+        if hasattr(self, "_floating_action_window"):
+            self.floating_complete_checkbox.updateGeometry()
+            self._floating_action_window.layout().invalidate()
+            self._floating_action_window.adjustSize()
         self._position_floating_action_bar()
 
     def _replace_current_project_entry(self, previous_path: str | None, next_path: str, status: str) -> None:

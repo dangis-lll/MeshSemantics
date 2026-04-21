@@ -3,23 +3,17 @@ from __future__ import annotations
 import colorsys
 from pathlib import Path
 
+from PyQt6 import uic
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
-    QCheckBox,
     QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
     QAbstractSpinBox,
-    QPushButton,
     QSizePolicy,
-    QSpinBox,
     QAbstractItemView,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -53,122 +47,16 @@ class LabelPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("label-panel")
         self._colormap = dict(colormap)
+        self._is_completed = False
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
+        uic.loadUi(str(Path(__file__).with_name("label_panel.ui")), self)
 
         content = self
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(10)
-
-        top = QFrame()
-        top.setProperty("panel", True)
-        top_layout = QGridLayout(top)
-        top_layout.setContentsMargins(12, 12, 12, 12)
-        top_layout.setHorizontalSpacing(10)
-        top_layout.setVerticalSpacing(8)
-
-        caption = QLabel("Active Label")
-        caption.setProperty("role", "caption")
-        self.label_spin = QSpinBox()
-        self.label_spin.setRange(0, max(0, max_label))
-        self.label_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
-        self.label_spin.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
-        self.label_spin.valueChanged.connect(self._on_label_value_changed)
-        self.add_label_button = QPushButton("Add Label")
-        self.add_label_button.clicked.connect(self.add_next_label)
-        self.color_chip = ColorChip()
-        self.label_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.color_chip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        active_row = QHBoxLayout()
-        active_row.setSpacing(8)
-        active_row.addWidget(self.label_spin, 1)
-        active_row.addWidget(self.color_chip, 1)
-
-        top_layout.addWidget(caption, 0, 0)
-        top_layout.addLayout(active_row, 1, 0)
-
-        swap_frame = QFrame()
-        swap_frame.setProperty("panel", True)
-        swap_layout = QVBoxLayout(swap_frame)
-        swap_layout.setContentsMargins(12, 12, 12, 12)
-        swap_layout.setSpacing(8)
-
-        swap_label = QLabel("Remap Label")
-        swap_label.setProperty("role", "caption")
-        row = QHBoxLayout()
-        self.swap_a = QSpinBox()
-        self.swap_b = QSpinBox()
-        self.swap_a.setRange(0, max(0, max_label))
-        self.swap_b.setRange(0, max(0, max_label))
-        self.swap_a.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
-        self.swap_b.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
-        self.swap_button = QPushButton("Apply")
-        self.swap_button.clicked.connect(self._emit_swap)
-        row.addWidget(self.swap_a)
-        row.addWidget(self.swap_b)
-        row.addWidget(self.swap_button)
-
-        swap_layout.addWidget(swap_label)
-        swap_layout.addLayout(row)
-
-        table_frame = QFrame()
-        table_frame.setProperty("panel", True)
-        table_layout = QVBoxLayout(table_frame)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(8)
-
-        table_label = QLabel("Label List")
-        table_label.setProperty("role", "caption")
-        self.overwrite_checkbox = QCheckBox("Overwrite")
-        self.overwrite_checkbox.setObjectName("overwrite-toggle")
-        self.overwrite_checkbox.setChecked(False)
-        self.overwrite_checkbox.setStyleSheet(
-            self._indicator_checkbox_qss("overwrite-toggle", checked_color="#c73333")
-        )
-        self.overwrite_checkbox.clicked.connect(self._emit_overwrite_mode_changed)
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        self.add_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.delete_label_button = QPushButton("Delete Label")
-        self.delete_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.delete_label_button.clicked.connect(self._emit_delete_label)
-        action_row.addWidget(self.add_label_button)
-        action_row.addWidget(self.delete_label_button)
-
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Label", "Color"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.itemDoubleClicked.connect(self._edit_color)
-        self.table.itemChanged.connect(self._sync_colormap_from_table)
-        self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
-
-        table_layout.addWidget(table_label)
-        table_layout.addWidget(self.table, 1)
-        table_layout.addWidget(self.overwrite_checkbox)
-        table_layout.addLayout(action_row)
-
-        footer_row = QHBoxLayout()
-        footer_row.setSpacing(8)
-        self.quick_save_button = QPushButton("Quick Save")
-        self.quick_save_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.quick_save_button.clicked.connect(self.quick_save_requested.emit)
-        footer_row.addWidget(self.quick_save_button)
-        self.complete_checkbox = QCheckBox("Completed")
-        self.complete_checkbox.setObjectName("completion-toggle")
-        self.complete_checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.complete_checkbox.setStyleSheet(self._completion_checkbox_qss())
-        self.complete_checkbox.clicked.connect(self.completion_toggle_requested.emit)
-        footer_row.addWidget(self.complete_checkbox)
-
-        outer.addWidget(top)
-        outer.addWidget(swap_frame)
-        outer.addWidget(table_frame, 1)
-        outer.addLayout(footer_row)
+        self._apply_ui_properties()
+        self._replace_color_chip_placeholder()
+        self._configure_widgets(max_label)
+        self._bind_signals()
         self._activation_widgets = [
             self,
             content,
@@ -184,14 +72,66 @@ class LabelPanel(QWidget):
             self.table.viewport(),
             self.overwrite_checkbox,
             self.delete_label_button,
-            self.quick_save_button,
-            self.complete_checkbox,
         ]
         for widget in self._activation_widgets:
             widget.installEventFilter(self)
 
         self.set_colormap(colormap)
         self.label_spin.setValue(0)
+
+    def _apply_ui_properties(self) -> None:
+        self.caption_label.setProperty("role", "caption")
+        self.swap_label.setProperty("role", "caption")
+        self.table_label.setProperty("role", "caption")
+        self.top_frame.setProperty("panel", True)
+        self.swap_frame.setProperty("panel", True)
+        self.table_frame.setProperty("panel", True)
+
+    def _replace_color_chip_placeholder(self) -> None:
+        placeholder = self.color_chip_placeholder
+        layout = self.active_row
+        index = layout.indexOf(placeholder)
+        self.color_chip = ColorChip(self)
+        self.color_chip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.insertWidget(index, self.color_chip, 1)
+        layout.removeWidget(placeholder)
+        placeholder.deleteLater()
+
+    def _configure_widgets(self, max_label: int) -> None:
+        self.label_spin.setRange(0, max(0, max_label))
+        self.label_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.label_spin.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
+        self.label_spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self.swap_a.setRange(0, max(0, max_label))
+        self.swap_b.setRange(0, max(0, max_label))
+        self.swap_a.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
+        self.swap_b.lineEdit().setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
+
+        self.overwrite_checkbox.setObjectName("overwrite-toggle")
+        self.overwrite_checkbox.setChecked(False)
+        self.overwrite_checkbox.setStyleSheet(
+            self._indicator_checkbox_qss("overwrite-toggle", checked_color="#c73333")
+        )
+        self.add_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.delete_label_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["Label", "Color"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+    def _bind_signals(self) -> None:
+        self.label_spin.valueChanged.connect(self._on_label_value_changed)
+        self.add_label_button.clicked.connect(self.add_next_label)
+        self.swap_button.clicked.connect(self._emit_swap)
+        self.overwrite_checkbox.clicked.connect(self._emit_overwrite_mode_changed)
+        self.delete_label_button.clicked.connect(self._emit_delete_label)
+        self.table.itemDoubleClicked.connect(self._edit_color)
+        self.table.itemChanged.connect(self._sync_colormap_from_table)
+        self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
 
     def current_label(self) -> int:
         return int(self.label_spin.value())
@@ -282,11 +222,7 @@ class LabelPanel(QWidget):
         self.setToolTip(f"Labels | {labeled_cells}/{total_cells}")
 
     def set_completion_state(self, is_completed: bool) -> None:
-        self.complete_checkbox.blockSignals(True)
-        self.complete_checkbox.setChecked(is_completed)
-        self.complete_checkbox.setText("Completed")
-        self.complete_checkbox.blockSignals(False)
-        self.complete_checkbox.setEnabled(True)
+        self._is_completed = bool(is_completed)
 
     def overwrite_existing_labels(self) -> bool:
         return self.overwrite_checkbox.isChecked()

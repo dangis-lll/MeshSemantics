@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from PyQt6 import uic
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QComboBox,
     QDockWidget,
-    QFrame,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QProgressBar,
-    QPushButton,
     QMenu,
     QSizePolicy,
     QTableView,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -330,51 +328,21 @@ class FilePanel(QDockWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(180)
         self._search_timer.timeout.connect(self._apply_search_text)
-
         content = QWidget(self)
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        panel = QFrame()
-        panel.setProperty("panel", True)
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(12, 12, 12, 12)
-        panel_layout.setSpacing(10)
-
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search meshes")
-
-        self.status_filter = QComboBox()
-        self.status_filter.addItem("All", "all")
-        self.status_filter.addItem("To Do", "pending")
-        self.status_filter.addItem("Unlabeled", STATUS_UNLABELED)
-        self.status_filter.addItem("In Progress", STATUS_IN_PROGRESS)
-        self.status_filter.addItem("Completed", STATUS_COMPLETED)
-        self.status_filter.addItem("Failed", STATUS_FAILED)
-
-        controls.addWidget(self.search_edit, 1)
-        controls.addWidget(self.status_filter)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        self.project_label = QLabel("No folder opened")
-        self.project_label.setProperty("role", "caption")
-        self.project_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.project_label.setMinimumWidth(0)
-        self.summary_label = QLabel("")
-        self.summary_label.setProperty("role", "caption")
-        self.next_model_button = QPushButton("Next Model")
-        action_row.addWidget(self.project_label, 1)
-        action_row.addWidget(self.summary_label)
-        action_row.addWidget(self.next_model_button)
+        uic.loadUi(str(Path(__file__).with_name("file_panel.ui")), content)
+        self._content = content
+        self.panel_frame = content.panel_frame
+        self.search_edit = content.search_edit
+        self.status_filter = content.status_filter
+        self.project_label = content.project_label
+        self.summary_label = content.summary_label
+        self.table = content.table
+        self.progress_label = content.progress_label
+        self.progress = content.progress
+        self._apply_ui_properties()
+        self._configure_widgets()
 
         self.model = FileTableModel(self)
-
-        self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
@@ -392,30 +360,36 @@ class FilePanel(QDockWidget):
         self.table.selectionModel().selectionChanged.connect(self._sync_buttons)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
-
-        self.progress_label = QLabel("")
-        self.progress_label.setProperty("role", "caption")
-        self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.progress_label.setMinimumWidth(0)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setVisible(False)
-        self.progress_label.setVisible(False)
-
-        panel_layout.addLayout(controls)
-        panel_layout.addLayout(action_row)
-        panel_layout.addWidget(self.table, 1)
-        panel_layout.addWidget(self.progress_label)
-        panel_layout.addWidget(self.progress)
-        layout.addWidget(panel)
         self.setWidget(content)
 
         self.search_edit.textChanged.connect(self._queue_search_text)
         self.status_filter.currentIndexChanged.connect(self._on_status_filter_changed)
-        self.next_model_button.clicked.connect(self._open_next_model)
         self.table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.topLevelChanged.connect(self._on_top_level_changed)
         self._sync_buttons()
+
+    def _apply_ui_properties(self) -> None:
+        self.panel_frame.setProperty("panel", True)
+        self.project_label.setProperty("role", "caption")
+        self.summary_label.setProperty("role", "caption")
+        self.progress_label.setProperty("role", "caption")
+
+    def _configure_widgets(self) -> None:
+        self.project_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.project_label.setMinimumWidth(0)
+        self.summary_label.setText("")
+        self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.progress_label.setMinimumWidth(0)
+        self.progress_label.setVisible(False)
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+
+        self.status_filter.addItem("All", "all")
+        self.status_filter.addItem("To Do", "pending")
+        self.status_filter.addItem("Unlabeled", STATUS_UNLABELED)
+        self.status_filter.addItem("In Progress", STATUS_IN_PROGRESS)
+        self.status_filter.addItem("Completed", STATUS_COMPLETED)
+        self.status_filter.addItem("Failed", STATUS_FAILED)
 
     def sizeHint(self) -> QSize:
         hint = super().sizeHint()
@@ -457,7 +431,6 @@ class FilePanel(QDockWidget):
         self.progress_label.setVisible(busy)
         self.progress_label.setText(message)
         self.progress_label.setToolTip(message if busy else "")
-        self.next_model_button.setEnabled(not busy and self._has_next_model())
         self.table.setEnabled(not busy)
 
     def selected_path(self) -> str | None:
@@ -544,8 +517,7 @@ class FilePanel(QDockWidget):
         self.table.scrollTo(self.model.index(row, 0))
 
     def _sync_buttons(self) -> None:
-        busy = self.progress.isVisible()
-        self.next_model_button.setEnabled(not busy and self._has_next_model())
+        return
 
     def _has_next_model(self) -> bool:
         selected_path = self.selected_path()

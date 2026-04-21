@@ -1,21 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterable
 
+from PyQt6 import uic
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QFrame,
     QHeaderView,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -36,90 +32,12 @@ class LandmarkPanel(QWidget):
         self._active_index = -1
         self._manual_name_width: int | None = None
         self._preserve_input_text = False
+        uic.loadUi(str(Path(__file__).with_name("landmark_panel.ui")), self)
 
         content = self
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(10)
-
-        top = QFrame()
-        top.setProperty("panel", True)
-        top_layout = QVBoxLayout(top)
-        top_layout.setContentsMargins(12, 12, 12, 12)
-        top_layout.setSpacing(10)
-
-        caption = QLabel("Landmark Editor")
-        caption.setProperty("role", "caption")
-        top_layout.addWidget(caption)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Landmark name")
-        self.name_edit.returnPressed.connect(self._emit_add_requested)
-        self.add_button = QPushButton("Add")
-        self.add_button.setAutoDefault(True)
-        self.add_button.clicked.connect(self._emit_add_requested)
-        self.rename_button = QPushButton("Rename")
-        self.rename_button.clicked.connect(self._emit_rename_requested)
-        row.addWidget(self.name_edit, 1)
-        row.addWidget(self.add_button)
-        row.addWidget(self.rename_button)
-        top_layout.addLayout(row)
-
-        self.selection_hint = QLabel("Double click a row to make it active, then pick a point on the mesh.")
-        self.selection_hint.setWordWrap(True)
-        self.selection_hint.setStyleSheet("color: #6e89ab; font-size: 11px;")
-        top_layout.addWidget(self.selection_hint)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        self.pick_button = QPushButton("Pick On Mesh")
-        self.pick_button.clicked.connect(self._emit_pick_requested)
-        self.delete_button = QPushButton("Delete")
-        self.delete_button.clicked.connect(self._emit_delete_requested)
-        self.pick_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.delete_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        action_row.addWidget(self.pick_button)
-        action_row.addWidget(self.delete_button)
-        top_layout.addLayout(action_row)
-
-        table_frame = QFrame()
-        table_frame.setProperty("panel", True)
-        table_layout = QVBoxLayout(table_frame)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(8)
-
-        table_label = QLabel("Landmark List")
-        table_label.setProperty("role", "caption")
-        table_layout.addWidget(table_label)
-
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Name", "X", "Y", "Z", "State"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setMinimumSectionSize(52)
-        for column in range(self.table.columnCount()):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().sectionResized.connect(self._remember_manual_column_width)
-        self.table.itemDoubleClicked.connect(self._emit_select_requested)
-        self.table.itemSelectionChanged.connect(self._sync_name_from_selection)
-        table_layout.addWidget(self.table, 1)
-
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
-        self.import_button = QPushButton("Import JSON")
-        self.import_button.clicked.connect(self.import_requested.emit)
-        self.import_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        footer.addWidget(self.import_button)
-
-        outer.addWidget(top)
-        outer.addWidget(table_frame, 1)
-        outer.addLayout(footer)
+        self._apply_ui_properties()
+        self._configure_widgets()
+        self._bind_signals()
         self._activation_widgets = [
             self,
             content,
@@ -137,6 +55,42 @@ class LandmarkPanel(QWidget):
 
         self._apply_default_column_widths()
         self._sync_action_state()
+
+    def _apply_ui_properties(self) -> None:
+        self.caption_label.setProperty("role", "caption")
+        self.table_label.setProperty("role", "caption")
+        self.top_frame.setProperty("panel", True)
+        self.table_frame.setProperty("panel", True)
+        self.selection_hint.setStyleSheet("color: #6e89ab; font-size: 11px;")
+
+    def _configure_widgets(self) -> None:
+        self.add_button.setAutoDefault(True)
+        self.pick_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.delete_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.import_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Name", "X", "Y", "Z", "State"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setMinimumSectionSize(52)
+        for column in range(self.table.columnCount()):
+            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+
+    def _bind_signals(self) -> None:
+        self.name_edit.returnPressed.connect(self._emit_add_requested)
+        self.add_button.clicked.connect(self._emit_add_requested)
+        self.rename_button.clicked.connect(self._emit_rename_requested)
+        self.pick_button.clicked.connect(self._emit_pick_requested)
+        self.delete_button.clicked.connect(self._emit_delete_requested)
+        self.table.horizontalHeader().sectionResized.connect(self._remember_manual_column_width)
+        self.table.itemDoubleClicked.connect(self._emit_select_requested)
+        self.table.itemSelectionChanged.connect(self._sync_name_from_selection)
+        self.import_button.clicked.connect(self.import_requested.emit)
 
     def set_landmarks(self, landmarks: Iterable[dict], active_index: int = -1) -> None:
         rows = list(landmarks)

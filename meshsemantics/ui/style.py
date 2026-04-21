@@ -176,6 +176,11 @@ QFrame[panel="true"] {
     border: 1px solid rgba(132, 162, 210, 0.20);
     border-radius: 16px;
 }
+QFrame#vedo-shell {
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(132, 162, 210, 0.20);
+    border-radius: 0px;
+}
 """
 
 

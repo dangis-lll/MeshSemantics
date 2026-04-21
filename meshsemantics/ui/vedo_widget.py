@@ -75,6 +75,7 @@ class VedoWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.shell = QFrame(self)
+        self.shell.setObjectName("vedo-shell")
         self.shell.setProperty("panel", True)
         shell_layout = QVBoxLayout(self.shell)
         shell_layout.setContentsMargins(1, 1, 1, 1)

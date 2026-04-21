@@ -10,6 +10,7 @@ from typing import Callable
 
 import numpy as np
 
+from PyQt6 import uic
 from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QRegion, QShortcut
 from PyQt6.QtWidgets import (
@@ -26,7 +27,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
-    QStatusBar,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -167,28 +167,30 @@ class MainWindow(QMainWindow):
         self._restore_last_project()
 
     def _configure_window(self) -> None:
+        uic.loadUi(str(Path(__file__).with_name("main_window.ui")), self)
         self.setWindowTitle("MeshSemantics")
         width, height = self.settings.get("window_size", [1560, 980])
         self.resize(int(width), int(height))
         self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         self.setAcceptDrops(True)
         self.setStyleSheet(build_app_qss())
-        self.setCentralWidget(self.vedo_widget)
+        self._attach_central_widget()
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.panel_dock)
         self.setcurrentpanel("label")
         self._build_floating_action_bar()
         self.label_panel.set_overwrite_existing_labels(bool(self.settings.get("overwrite_existing_labels", False)))
+        self.statusBar().showMessage("Ready")
 
-        status = QStatusBar()
-        status.showMessage("Ready")
-        self.setStatusBar(status)
+    def _attach_central_widget(self) -> None:
+        layout = self.central_layout
+        placeholder = self.central_placeholder
+        index = layout.indexOf(placeholder)
+        layout.insertWidget(index, self.vedo_widget)
+        layout.removeWidget(placeholder)
+        placeholder.deleteLater()
 
     def _build_floating_action_bar(self) -> None:
-        self.file_panel.next_model_button.hide()
-        self.label_panel.quick_save_button.hide()
-        self.label_panel.complete_checkbox.hide()
-
         self.floating_previous_model_button = QPushButton(self.vedo_widget)
         self.floating_previous_model_button.setIcon(self._create_arrow_icon(direction="left"))
         self.floating_previous_model_button.setToolTip("Previous Model")
@@ -320,8 +322,6 @@ class MainWindow(QMainWindow):
         self.label_panel.remap_requested.connect(self._remap_labels)
         self.label_panel.delete_requested.connect(self._delete_label)
         self.label_panel.overwrite_mode_changed.connect(self._on_overwrite_mode_changed)
-        self.label_panel.completion_toggle_requested.connect(self.toggle_task_completed)
-        self.label_panel.quick_save_requested.connect(self.quick_save_current)
         self.label_panel.panel_activated.connect(lambda: self.setcurrentpanel("label"))
         self.landmark_panel.add_requested.connect(self._add_landmark)
         self.landmark_panel.rename_requested.connect(self._rename_landmark)
@@ -1532,8 +1532,6 @@ class MainWindow(QMainWindow):
         is_completed = current_status == STATUS_COMPLETED
         self.label_panel.set_completion_state(is_completed)
         enabled = self.current_path is not None
-        self.label_panel.complete_checkbox.setEnabled(enabled)
-        self.label_panel.quick_save_button.setEnabled(enabled)
         if hasattr(self, "floating_complete_checkbox"):
             self.floating_complete_checkbox.blockSignals(True)
             self.floating_complete_checkbox.setChecked(is_completed)

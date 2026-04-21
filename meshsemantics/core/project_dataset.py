@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from meshsemantics.core.file_io import FileIO
+from meshsemantics.core.project_status_store import normalize_relative_status_key
 
 STATUS_UNLABELED = "unlabeled"
 STATUS_IN_PROGRESS = "in_progress"
@@ -55,6 +56,13 @@ def normalize_path(value: str | Path | None) -> str | None:
         return str(Path(value))
 
 
+def _relative_status_key(path: str | Path, root: str | Path) -> str | None:
+    try:
+        return normalize_relative_status_key(Path(path).relative_to(Path(root)).with_suffix(""))
+    except Exception:
+        return None
+
+
 def scan_project_dataset(
     folder: str | Path,
     *,
@@ -67,7 +75,11 @@ def scan_project_dataset(
     if not root.exists():
         return ProjectDataset(str(root), tuple(), None, None, None)
 
-    saved_status = {str(key).replace("/", "\\"): value for key, value in (status_by_relative_path or {}).items()}
+    saved_status = {
+        normalized_key: value
+        for key, value in (status_by_relative_path or {}).items()
+        if (normalized_key := normalize_relative_status_key(key)) is not None
+    }
     groups = _scan_supported_mesh_files(root, progress_callback=progress_callback)
 
     entries: list[ProjectEntry] = []
@@ -89,12 +101,12 @@ def scan_project_dataset(
             modified_at = max(modified_at, datetime.fromtimestamp(candidate_mtime))
 
         work_path = normalize_path(work)
-        status = saved_status.get(str(work.relative_to(root).with_suffix("")).replace("/", "\\")) or (
+        status = saved_status.get(_relative_status_key(work, root) or "") or (
             STATUS_IN_PROGRESS if vtp_item else STATUS_UNLABELED
         )
         entries.append(
             ProjectEntry(
-                display_path=relative_key.replace("\\", "/"),
+                display_path=normalize_relative_status_key(relative_key) or relative_key,
                 source_path=str(source.resolve()),
                 work_path=work_path or str(work),
                 status=status if status in STATUS_ORDER else STATUS_UNLABELED,
@@ -187,8 +199,10 @@ def build_relative_status_index(dataset: ProjectDataset | None) -> dict[str, str
     index: dict[str, str] = {}
     for entry in dataset.entries:
         try:
-            relative_path = str(Path(entry.work_path).relative_to(root).with_suffix("")).replace("/", "\\")
+            relative_path = _relative_status_key(entry.work_path, root)
         except Exception:
+            continue
+        if relative_path is None:
             continue
         index[relative_path] = entry.status
     return index
@@ -226,15 +240,16 @@ def build_work_path_status_index(
 ) -> dict[str, str]:
     if dataset is None:
         return {}
-    relative_status = {str(key).replace("/", "\\"): value for key, value in (status_by_relative_path or {}).items()}
+    relative_status = {
+        normalized_key: value
+        for key, value in (status_by_relative_path or {}).items()
+        if (normalized_key := normalize_relative_status_key(key)) is not None
+    }
     root = Path(dataset.root_path)
     index: dict[str, str] = {}
     for entry in dataset.entries:
         relative_key = None
-        try:
-            relative_key = str(Path(entry.work_path).relative_to(root).with_suffix("")).replace("/", "\\")
-        except Exception:
-            relative_key = None
+        relative_key = _relative_status_key(entry.work_path, root)
         status = relative_status.get(relative_key) if relative_key is not None else None
         index[entry.work_path] = status if status in STATUS_ORDER else entry.status
     return index
@@ -348,7 +363,7 @@ def _scan_supported_mesh_files(
                     if progress_callback is not None:
                         now = time.monotonic()
                         if scanned_files == 1 or scanned_files % 250 == 0 or now - last_progress_time >= 0.2:
-                            progress_callback(scanned_files, relative_key.replace("\\", "/"))
+                            progress_callback(scanned_files, normalize_relative_status_key(relative_key) or relative_key)
                             last_progress_time = now
         except OSError:
             continue

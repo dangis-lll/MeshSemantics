@@ -11,6 +11,15 @@ def status_table_path(root: str | Path) -> Path:
     return Path(root).expanduser() / STATUS_TABLE_NAME
 
 
+def normalize_relative_status_key(value: str | Path | None) -> str | None:
+    if value in (None, ""):
+        return None
+    key = str(value).strip().replace("\\", "/")
+    while "//" in key:
+        key = key.replace("//", "/")
+    return key or None
+
+
 
 def load_project_statuses(root: str | Path) -> dict[str, str]:
     for table_path in [status_table_path(root)]:
@@ -26,7 +35,10 @@ def load_project_statuses(root: str | Path) -> dict[str, str]:
                     status = str(row.get("status", "")).strip()
                     if not relative_path or not status:
                         continue
-                    statuses[relative_path.replace("/", "\\")] = status
+                    normalized_key = normalize_relative_status_key(relative_path)
+                    if normalized_key is None:
+                        continue
+                    statuses[normalized_key] = status
         except Exception:
             continue
         return statuses
@@ -42,4 +54,7 @@ def save_project_statuses(root: str | Path, status_by_relative_path: dict[str, s
         for relative_path, status in sorted(status_by_relative_path.items()):
             if not relative_path or not status:
                 continue
-            writer.writerow([relative_path.replace("\\", "/"), status])
+            normalized_key = normalize_relative_status_key(relative_path)
+            if normalized_key is None:
+                continue
+            writer.writerow([normalized_key, status])

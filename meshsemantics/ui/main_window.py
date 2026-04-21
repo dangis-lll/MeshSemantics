@@ -48,7 +48,11 @@ from meshsemantics.core.project_dataset import (
     normalize_path,
     scan_project_dataset,
 )
-from meshsemantics.core.project_status_store import load_project_statuses, save_project_statuses
+from meshsemantics.core.project_status_store import (
+    load_project_statuses,
+    normalize_relative_status_key,
+    save_project_statuses,
+)
 from meshsemantics.core.settings import load_colormap, load_settings, save_colormap, save_settings
 from meshsemantics.ui.file_panel import FilePanel
 from meshsemantics.ui.landmark_panel import LandmarkPanel
@@ -1923,6 +1927,6 @@ class MainWindow(QMainWindow):
         if normalized is None:
             return None
         try:
-            return str(Path(normalized).relative_to(Path(root)).with_suffix("")).replace("/", "\\")
+            return normalize_relative_status_key(Path(normalized).relative_to(Path(root)).with_suffix(""))
         except Exception:
             return None

@@ -194,30 +194,28 @@ When switching from `Labels` to `Landmarks`, any active spline preview is cleare
 
 ## Running the App
 
-From the repository root:
+This project is currently validated in the Conda environment `meshlabeler`.
+
+Recommended setup:
 
 ```bash
+conda activate meshlabeler
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-## Environment
+Validated interpreter:
 
-Recommended Python version:
+- Python `3.10.20`
 
-- Python 3.10+
+Validated direct dependencies in `meshlabeler`:
 
-Install dependencies with:
+- `numpy==2.2.6`
+- `PyQt6==6.11.0`
+- `vedo==2026.6.1`
+- `vtk==9.6.1`
 
-```bash
-pip install -r requirements.txt
-```
-
-Current requirements:
-
-- `numpy>=1.24`
-- `PyQt6>=6.4`
-- `vedo>=2023.5`
-- `vtk>=9.2`
+If you create the environment from scratch, make sure the Python version and the four packages above remain compatible.
 
 ## Project Structure
 

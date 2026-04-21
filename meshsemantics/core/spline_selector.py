@@ -4,7 +4,8 @@ import numpy as np
 from vtkmodules.vtkCommonComputationalGeometry import vtkParametricSpline
 from vtkmodules.vtkCommonCore import vtkPoints, reference
 from vtkmodules.vtkCommonDataModel import vtkGenericCell
-from vtkmodules.vtkFiltersCore import vtkClipPolyData, vtkIdFilter, vtkPolyDataConnectivityFilter
+from vtkmodules.vtkFiltersCore import vtkClipPolyData, vtkPolyDataConnectivityFilter
+from vtkmodules.vtkFiltersCore import vtkGenerateIds as vtkIdFilter
 from vtkmodules.vtkFiltersModeling import vtkSelectPolyData
 from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
 from vtkmodules.vtkCommonDataModel import vtkCellLocator
@@ -298,7 +299,7 @@ def select_cells_by_surface_loop(polydata, loop_points_world) -> np.ndarray:
     output = connectivity.GetOutput()
     cell_data = output.GetCellData()
     id_array = None
-    for name in ["OriginalCellId", "vtkIdFilter_Ids"]:
+    for name in ["OriginalCellId", "vtkCellIds", "vtkIdFilter_Ids"]:
         id_array = cell_data.GetArray(name)
         if id_array is not None:
             break

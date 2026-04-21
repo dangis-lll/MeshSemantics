@@ -90,18 +90,8 @@ class FileIO:
         export_mesh.celldata["Label"] = np.asarray(labels, dtype=np.uint8).reshape(-1, 1)
 
         cell_data = export_mesh.dataset.GetCellData()
-        point_data = export_mesh.dataset.GetPointData()
-        cell_data.SetActiveScalars("Label")
-
-        # Normals are only needed for interactive preview and should not be persisted.
-        if cell_data.GetNormals() is not None:
-            cell_data.SetNormals(None)
-        if point_data.GetNormals() is not None:
-            point_data.SetNormals(None)
         if cell_data.HasArray("Normals"):
             cell_data.RemoveArray("Normals")
-        if point_data.HasArray("Normals"):
-            point_data.RemoveArray("Normals")
 
         export_mesh.dataset.Modified()
         vedo.write(export_mesh, str(path))

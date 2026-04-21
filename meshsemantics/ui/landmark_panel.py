@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Iterable
 
 from PyQt6 import uic
@@ -14,6 +13,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QWidget,
 )
+from meshsemantics.runtime import ui_path
 
 
 class LandmarkPanel(QWidget):
@@ -32,7 +32,7 @@ class LandmarkPanel(QWidget):
         self._active_index = -1
         self._manual_name_width: int | None = None
         self._preserve_input_text = False
-        uic.loadUi(str(Path(__file__).with_name("landmark_panel.ui")), self)
+        uic.loadUi(str(ui_path("landmark_panel.ui")), self)
 
         content = self
         self._apply_ui_properties()

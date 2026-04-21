@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from meshsemantics.runtime import asset_path
 
 
 APP_QSS = """
@@ -188,7 +188,7 @@ QFrame#vedo-shell {
 
 
 def _asset_url(filename: str) -> str:
-    return (Path(__file__).resolve().parents[1] / "assets" / filename).as_posix()
+    return asset_path(filename).as_posix()
 
 
 def build_app_qss() -> str:

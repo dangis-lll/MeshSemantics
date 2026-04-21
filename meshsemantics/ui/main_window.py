@@ -54,6 +54,7 @@ from meshsemantics.core.project_status_store import (
     save_project_statuses,
 )
 from meshsemantics.core.settings import load_colormap, load_settings, save_colormap, save_settings
+from meshsemantics.runtime import asset_path, ui_path
 from meshsemantics.ui.file_panel import FilePanel
 from meshsemantics.ui.landmark_panel import LandmarkPanel
 from meshsemantics.ui.label_panel import LabelPanel
@@ -189,7 +190,7 @@ class MainWindow(QMainWindow):
         self._restore_last_project()
 
     def _configure_window(self) -> None:
-        uic.loadUi(str(Path(__file__).with_name("main_window.ui")), self)
+        uic.loadUi(str(ui_path("main_window.ui")), self)
         self.setWindowTitle("MeshSemantics")
         width, height = self.settings.get("window_size", [1560, 980])
         self.resize(int(width), int(height))
@@ -1785,7 +1786,7 @@ class MainWindow(QMainWindow):
             self.open_project(initial_dir, auto_load=False)
 
     def _asset_path(self, filename: str) -> Path:
-        return Path(__file__).resolve().parents[1] / "assets" / filename
+        return asset_path(filename)
 
     def _style_toolbar_icon_button(self, toolbar: QToolBar, action: QAction, object_name: str) -> None:
         button = toolbar.widgetForAction(action)

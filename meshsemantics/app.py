@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import importlib
 import sys
-from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QSurfaceFormat
 
+from meshsemantics.runtime import asset_path
 from meshsemantics.ui.main_window import MainWindow
 
 
@@ -35,9 +35,8 @@ def build_app() -> QApplication:
     app = QApplication(sys.argv)
     app.setApplicationName("MeshSemantics")
     app.setOrganizationName("MeshSemantics")
-    assets_dir = Path(__file__).resolve().parent / "assets"
     for icon_name in ("app.png", "app.ico"):
-        app_icon_path = assets_dir / icon_name
+        app_icon_path = asset_path(icon_name)
         if app_icon_path.exists():
             app.setWindowIcon(QIcon(str(app_icon_path)))
             break

@@ -24,6 +24,7 @@ from meshsemantics.core.project_dataset import (
     STATUS_IN_PROGRESS,
     STATUS_UNLABELED,
 )
+from meshsemantics.runtime import ui_path
 
 
 class FileTableModel(QAbstractTableModel):
@@ -329,7 +330,7 @@ class FilePanel(QDockWidget):
         self._search_timer.setInterval(180)
         self._search_timer.timeout.connect(self._apply_search_text)
         content = QWidget(self)
-        uic.loadUi(str(Path(__file__).with_name("file_panel.ui")), content)
+        uic.loadUi(str(ui_path("file_panel.ui")), content)
         self._content = content
         self.panel_frame = content.panel_frame
         self.search_edit = content.search_edit

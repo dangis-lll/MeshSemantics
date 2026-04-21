@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import colorsys
-from pathlib import Path
 
 from PyQt6 import uic
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
@@ -18,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from meshsemantics.config.defaults import preset_label_rgb
+from meshsemantics.runtime import asset_path, ui_path
 
 
 class ColorChip(QFrame):
@@ -50,7 +50,7 @@ class LabelPanel(QWidget):
         self._is_completed = False
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
-        uic.loadUi(str(Path(__file__).with_name("label_panel.ui")), self)
+        uic.loadUi(str(ui_path("label_panel.ui")), self)
 
         content = self
         self._apply_ui_properties()
@@ -241,8 +241,7 @@ class LabelPanel(QWidget):
             self.swap_a.blockSignals(False)
 
     def _asset_url(self, filename: str) -> str:
-        path = Path(__file__).resolve().parents[1] / "assets" / filename
-        return path.as_posix()
+        return asset_path(filename).as_posix()
 
     def _completion_checkbox_qss(self) -> str:
         return self._indicator_checkbox_qss("completion-toggle", checked_color="#c73333")

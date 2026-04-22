@@ -1,0 +1,574 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MeshDoctorPanelForm</class>
+ <widget class="QWidget" name="MeshDoctorPanelForm">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>380</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="root_layout">
+   <property name="spacing">
+    <number>12</number>
+   </property>
+   <property name="leftMargin">
+    <number>12</number>
+   </property>
+   <property name="topMargin">
+    <number>12</number>
+   </property>
+   <property name="rightMargin">
+    <number>12</number>
+   </property>
+   <property name="bottomMargin">
+    <number>12</number>
+   </property>
+   <item>
+    <widget class="QScrollArea" name="scroll_area">
+     <property name="frameShape">
+      <enum>QFrame::Shape::NoFrame</enum>
+     </property>
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <property name="horizontalScrollBarPolicy">
+      <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
+     </property>
+     <property name="verticalScrollBarPolicy">
+      <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
+     </property>
+     <widget class="QWidget" name="content_widget">
+      <property name="geometry">
+       <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>356</width>
+        <height>900</height>
+       </rect>
+      </property>
+      <layout class="QVBoxLayout" name="content_layout">
+       <property name="spacing">
+        <number>12</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QFrame" name="checks_frame">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QGridLayout" name="checks_layout">
+          <property name="leftMargin">
+           <number>16</number>
+          </property>
+          <property name="topMargin">
+           <number>16</number>
+          </property>
+          <property name="rightMargin">
+           <number>16</number>
+          </property>
+          <property name="bottomMargin">
+           <number>16</number>
+          </property>
+          <property name="horizontalSpacing">
+           <number>12</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>12</number>
+          </property>
+          <item row="0" column="0" colspan="4">
+           <widget class="QLabel" name="caption_label">
+            <property name="text">
+             <string>Mesh Doctor</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QCheckBox" name="non_manifold_checkbox">
+            <property name="text">
+             <string>Non-manifold Edges</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLabel" name="non_manifold_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QCheckBox" name="self_intersection_checkbox">
+            <property name="text">
+             <string>Self-intersections</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="3">
+           <widget class="QLabel" name="self_intersection_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QCheckBox" name="highly_creased_checkbox">
+            <property name="text">
+             <string>Highly Creased Areas</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QLabel" name="highly_creased_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QCheckBox" name="spike_checkbox">
+            <property name="text">
+             <string>Spikes</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="3">
+           <widget class="QLabel" name="spike_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QCheckBox" name="small_component_checkbox">
+            <property name="text">
+             <string>Small Components</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QLabel" name="small_component_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="2">
+           <widget class="QCheckBox" name="small_tunnel_checkbox">
+            <property name="text">
+             <string>Small Tunnels</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="3">
+           <widget class="QLabel" name="small_tunnel_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QCheckBox" name="small_hole_checkbox">
+            <property name="text">
+             <string>Small Holes</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QLabel" name="small_hole_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="2">
+           <widget class="QLabel" name="triangle_only_label">
+            <property name="text">
+             <string>Triangle Cells</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="3">
+           <widget class="QLabel" name="triangle_count_label">
+            <property name="text">
+             <string>-</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="options_frame">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QGridLayout" name="options_layout">
+          <property name="leftMargin">
+           <number>16</number>
+          </property>
+          <property name="topMargin">
+           <number>16</number>
+          </property>
+          <property name="rightMargin">
+           <number>16</number>
+          </property>
+          <property name="bottomMargin">
+           <number>16</number>
+          </property>
+          <property name="horizontalSpacing">
+           <number>14</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>14</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="max_component_size_label">
+            <property name="text">
+             <string>Max component size:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QDoubleSpinBox" name="max_component_size_spin"/>
+          </item>
+          <item row="0" column="2">
+           <widget class="QLabel" name="max_component_size_unit_label">
+            <property name="text">
+             <string>mm</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="max_tunnel_size_label">
+            <property name="text">
+             <string>Max tunnel size:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QDoubleSpinBox" name="max_tunnel_size_spin"/>
+          </item>
+          <item row="1" column="2">
+           <widget class="QLabel" name="max_tunnel_size_unit_label">
+            <property name="text">
+             <string>mm</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="max_hole_perimeter_label">
+            <property name="text">
+             <string>Max hole perimeter:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QDoubleSpinBox" name="max_hole_perimeter_spin"/>
+          </item>
+          <item row="2" column="2">
+           <widget class="QLabel" name="max_hole_perimeter_unit_label">
+            <property name="text">
+             <string>mm</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="spike_sensitivity_label">
+            <property name="text">
+             <string>Spike sensitivity:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QSpinBox" name="spike_sensitivity_spin"/>
+          </item>
+          <item row="3" column="2">
+           <widget class="QLabel" name="spike_sensitivity_unit_label">
+            <property name="text">
+             <string>%</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="expand_level_label">
+            <property name="text">
+             <string>Expansion level:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QSpinBox" name="expand_level_spin"/>
+          </item>
+          <item row="4" column="2">
+           <widget class="QLabel" name="expand_level_unit_label">
+            <property name="text">
+             <string>steps</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="repair_options_frame">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QVBoxLayout" name="repair_layout">
+          <property name="spacing">
+           <number>8</number>
+          </property>
+          <property name="leftMargin">
+           <number>16</number>
+          </property>
+          <property name="topMargin">
+           <number>12</number>
+          </property>
+          <property name="rightMargin">
+           <number>16</number>
+          </property>
+          <property name="bottomMargin">
+           <number>12</number>
+          </property>
+          <item>
+           <widget class="QCheckBox" name="merge_points_checkbox">
+            <property name="text">
+             <string>Merge duplicate points</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="fill_holes_checkbox">
+            <property name="text">
+             <string>Fill holes</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="keep_largest_checkbox">
+            <property name="text">
+             <string>Keep largest component only</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="recompute_normals_checkbox">
+            <property name="text">
+             <string>Recompute normals</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="actions_frame">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QHBoxLayout" name="actions_layout">
+          <property name="spacing">
+           <number>10</number>
+          </property>
+          <property name="leftMargin">
+           <number>16</number>
+          </property>
+          <property name="topMargin">
+           <number>16</number>
+          </property>
+          <property name="rightMargin">
+           <number>16</number>
+          </property>
+          <property name="bottomMargin">
+           <number>16</number>
+          </property>
+          <item>
+           <widget class="QCheckBox" name="auto_check_checkbox">
+            <property name="text">
+             <string>Auto analyze</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="analyze_button">
+            <property name="text">
+             <string>Analyze</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="repair_button">
+            <property name="text">
+             <string>Repair</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="report_frame">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QVBoxLayout" name="report_layout">
+          <property name="spacing">
+           <number>8</number>
+          </property>
+          <property name="leftMargin">
+           <number>16</number>
+          </property>
+          <property name="topMargin">
+           <number>16</number>
+          </property>
+          <property name="rightMargin">
+           <number>16</number>
+          </property>
+          <property name="bottomMargin">
+           <number>16</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="status_label">
+            <property name="text">
+             <string>Ready.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="stats_label">
+            <property name="text">
+             <string>No mesh analyzed yet.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="report_header_layout">
+            <property name="spacing">
+             <number>8</number>
+            </property>
+            <item>
+             <widget class="QLabel" name="report_caption">
+              <property name="text">
+               <string>Detailed Results</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="report_header_spacer">
+              <property name="orientation">
+               <enum>Qt::Orientation::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QPushButton" name="report_toggle_button">
+              <property name="text">
+               <string>Show</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QTextEdit" name="report_edit">
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>220</height>
+             </size>
+            </property>
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="bottom_spacer">
+         <property name="orientation">
+          <enum>Qt::Orientation::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

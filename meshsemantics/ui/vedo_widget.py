@@ -22,6 +22,7 @@ except ImportError:
 
 class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):
     _ALLOWED_PLAIN_KEYS = {
+        Qt.Key.Key_R,
         Qt.Key.Key_S,
         Qt.Key.Key_E,
         Qt.Key.Key_C,
@@ -32,6 +33,7 @@ class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):
         Qt.Key.Key_Backspace,
     }
     _ALLOWED_CTRL_KEYS = {
+        Qt.Key.Key_R,
         Qt.Key.Key_S,
         Qt.Key.Key_Z,
         Qt.Key.Key_Y,

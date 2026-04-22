@@ -125,7 +125,7 @@ class MeshInteractor(QObject):
         self.message.emit("Landmark pick mode: left click the mesh to place the active landmark.")
 
     def set_interaction_context(self, context: str) -> None:
-        if context not in {"label", "landmark"}:
+        if context not in {"label", "landmark", "meshdoctor"}:
             return
         self._interaction_context = context
         self._suppress_right_drag = False

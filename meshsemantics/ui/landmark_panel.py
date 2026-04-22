@@ -75,7 +75,7 @@ class LandmarkPanel(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setMinimumSectionSize(52)
         for column in range(self.table.columnCount()):
@@ -227,6 +227,10 @@ class LandmarkPanel(QWidget):
         if watched is self.table.viewport() and event.type() == event.Type.Resize:
             self._apply_default_column_widths()
         return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_default_column_widths()
 
     def _handle_delete_shortcut(self) -> None:
         if self.selected_row() >= 0:

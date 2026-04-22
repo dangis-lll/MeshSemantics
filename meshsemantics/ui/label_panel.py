@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QFrame,
     QAbstractSpinBox,
+    QHeaderView,
     QSizePolicy,
     QAbstractItemView,
     QTableWidget,
@@ -48,6 +49,7 @@ class LabelPanel(QWidget):
         self.setObjectName("label-panel")
         self._colormap = dict(colormap)
         self._is_completed = False
+        self._manual_label_column_width: int | None = None
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
         uic.loadUi(str(ui_path("label_panel.ui")), self)
@@ -122,6 +124,12 @@ class LabelPanel(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setMinimumSectionSize(56)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self._apply_table_column_widths()
 
     def _bind_signals(self) -> None:
         self.label_spin.valueChanged.connect(self._on_label_value_changed)
@@ -129,6 +137,7 @@ class LabelPanel(QWidget):
         self.swap_button.clicked.connect(self._emit_swap)
         self.overwrite_checkbox.clicked.connect(self._emit_overwrite_mode_changed)
         self.delete_label_button.clicked.connect(self._emit_delete_label)
+        self.table.horizontalHeader().sectionResized.connect(self._remember_column_width)
         self.table.itemDoubleClicked.connect(self._edit_color)
         self.table.itemChanged.connect(self._sync_colormap_from_table)
         self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
@@ -176,6 +185,7 @@ class LabelPanel(QWidget):
         self.label_spin.setRange(0, max_existing_label)
         self.swap_a.setRange(0, max_existing_label)
         self.swap_b.setRange(0, max_existing_label)
+        self._apply_table_column_widths()
         self._select_row_for_label(self.current_label())
         self._refresh_chip()
 
@@ -401,4 +411,26 @@ class LabelPanel(QWidget):
             QEvent.Type.MouseButtonPress,
         }:
             self.panel_activated.emit()
+        if watched is self.table.viewport() and event.type() == event.Type.Resize:
+            self._apply_table_column_widths()
         return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_table_column_widths()
+
+    def _remember_column_width(self, logical_index: int, _old_size: int, new_size: int) -> None:
+        if logical_index == 0:
+            self._manual_label_column_width = int(new_size)
+
+    def _apply_table_column_widths(self) -> None:
+        header = self.table.horizontalHeader()
+        available_width = max(180, self.table.viewport().width())
+        max_label_width = max(72, available_width - 100)
+        if self._manual_label_column_width is not None:
+            label_width = min(max(56, self._manual_label_column_width), max_label_width)
+        else:
+            label_width = min(96, max(72, available_width // 3))
+        color_width = max(100, available_width - label_width - 2)
+        header.resizeSection(0, label_width)
+        header.resizeSection(1, color_width)

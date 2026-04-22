@@ -9,6 +9,7 @@ import sys
 from typing import Callable
 
 import numpy as np
+import vedo
 
 from PyQt6 import uic
 from PyQt6.QtCore import QObject, QPointF, QSize, Qt, QThread, QTimer, pyqtSignal, pyqtSlot
@@ -36,6 +37,12 @@ from PyQt6.QtWidgets import (
 from meshsemantics.core.file_io import FileIO
 from meshsemantics.core.interactor import MeshInteractor
 from meshsemantics.core.label_engine import LabelEngine
+from meshsemantics.core.mesh_doctor import (
+    MeshDoctorCheckConfig,
+    MeshDoctorRepairOptions,
+    analyze_polydata,
+    repair_polydata,
+)
 from meshsemantics.core.project_dataset import (
     ProjectDataset,
     STATUS_COMPLETED,
@@ -58,6 +65,7 @@ from meshsemantics.runtime import asset_path, ui_path
 from meshsemantics.ui.file_panel import FilePanel
 from meshsemantics.ui.landmark_panel import LandmarkPanel
 from meshsemantics.ui.label_panel import LabelPanel
+from meshsemantics.ui.mesh_doctor_panel import MeshDoctorPanel
 from meshsemantics.ui.panel_dock import PanelDockWidget
 from meshsemantics.ui.style import build_app_qss
 from meshsemantics.ui.vedo_widget import VedoWidget
@@ -176,7 +184,8 @@ class MainWindow(QMainWindow):
         self.file_panel = FilePanel(cache_limit=int(self.settings.get("cache_limit", 20)))
         self.label_panel = LabelPanel(self.colormap, max_label=int(self.settings.get("max_label", 255)))
         self.landmark_panel = LandmarkPanel()
-        self.panel_dock = PanelDockWidget(self.label_panel, self.landmark_panel)
+        self.mesh_doctor_panel = MeshDoctorPanel()
+        self.panel_dock = PanelDockWidget(self.label_panel, self.landmark_panel, self.mesh_doctor_panel)
         self.interactor = MeshInteractor(self.vedo_widget, self.settings, self)
 
         self._configure_window()
@@ -350,6 +359,9 @@ class MainWindow(QMainWindow):
         self.landmark_panel.save_requested.connect(self.quick_save_landmarks)
         self.landmark_panel.import_requested.connect(self.import_landmarks_json_dialog)
         self.landmark_panel.panel_activated.connect(lambda: self.setcurrentpanel("landmark"))
+        self.mesh_doctor_panel.analyze_requested.connect(self._run_mesh_doctor_analysis)
+        self.mesh_doctor_panel.repair_requested.connect(self._run_mesh_doctor_repair)
+        self.mesh_doctor_panel.panel_activated.connect(lambda: self.setcurrentpanel("meshdoctor"))
         self.panel_dock.current_panel_changed.connect(self.setcurrentpanel)
 
         self.vedo_widget.mesh_loaded.connect(self._refresh_stats)
@@ -364,10 +376,10 @@ class MainWindow(QMainWindow):
 
     def _bind_shortcuts(self) -> None:
         self._shortcut_bindings.clear()
-        self._register_shortcut("B", self, {"label", "landmark"}, self.file_panel.open_previous_model, enabled_when=self._shortcut_can_use_plain_action)
-        self._register_shortcut("N", self, {"label", "landmark"}, self.file_panel._open_next_model, enabled_when=self._shortcut_can_use_plain_action)
-        self._register_shortcut("Ctrl+S", self, {"label"}, self.quick_save_current)
-        self._register_shortcut("Ctrl+Shift+S", self, {"label"}, self.save_current)
+        self._register_shortcut("B", self, {"label", "landmark", "meshdoctor"}, self.file_panel.open_previous_model, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("N", self, {"label", "landmark", "meshdoctor"}, self.file_panel._open_next_model, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("Ctrl+S", self, {"label", "meshdoctor"}, self.quick_save_current)
+        self._register_shortcut("Ctrl+Shift+S", self, {"label", "meshdoctor"}, self.save_current)
         self._register_shortcut("S", self, {"label"}, self.interactor.begin_spline, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut(
             Qt.Key.Key_Return,
@@ -388,6 +400,8 @@ class MainWindow(QMainWindow):
         self._register_shortcut("M", self, {"label"}, self.toggle_task_completed, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut(QKeySequence.StandardKey.Undo, self, {"label"}, self.undo)
         self._register_shortcut(QKeySequence.StandardKey.Redo, self, {"label"}, self.redo)
+        self._register_shortcut("R", self, {"meshdoctor"}, self._run_mesh_doctor_analysis_from_ui, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("Ctrl+R", self, {"meshdoctor"}, self._run_mesh_doctor_repair_from_ui, enabled_when=self._shortcut_can_use_plain_action)
 
         self._register_shortcut(
             Qt.Key.Key_Return,
@@ -440,10 +454,10 @@ class MainWindow(QMainWindow):
         )
 
     def setcurrentpanel(self, panel: str) -> None:
-        if panel not in {"label", "landmark"}:
+        if panel not in {"label", "landmark", "meshdoctor"}:
             return
         previous_panel = self.currentPanel
-        if previous_panel == "label" and panel == "landmark":
+        if previous_panel == "label" and panel != "label":
             self.interactor.clear_preview()
         self.currentPanel = panel
         self.interactor.set_interaction_context(panel)
@@ -487,6 +501,9 @@ class MainWindow(QMainWindow):
 
     def _show_landmark_panel(self) -> None:
         self.setcurrentpanel("landmark")
+
+    def _show_mesh_doctor_panel(self) -> None:
+        self.setcurrentpanel("meshdoctor")
 
     def _handle_landmark_add_shortcut(self) -> None:
         self.landmark_panel.add_requested.emit(self.landmark_panel.name_edit.text().strip())
@@ -1228,6 +1245,7 @@ class MainWindow(QMainWindow):
         self.vedo_widget.set_mesh(mesh, self.label_engine.label_array, self.colormap)
         self._reset_landmarks()
         self._autoload_landmarks(file_path)
+        self.mesh_doctor_panel.clear_report()
         self.file_panel.set_busy(False)
         self.is_dirty = False
         self._clear_history()
@@ -1428,12 +1446,99 @@ class MainWindow(QMainWindow):
         self.vedo_widget.clear_mesh()
         self.label_engine.reset(np.zeros(0, dtype=np.int32))
         self._reset_landmarks()
+        self.mesh_doctor_panel.clear_report()
         self.current_path = None
         self.is_dirty = False
         self._clear_history()
         self._refresh_stats(0)
         self._refresh_completion_action()
         self.file_panel.set_current_path(None)
+
+    def _run_mesh_doctor_analysis_from_ui(self) -> None:
+        self._run_mesh_doctor_analysis(self.mesh_doctor_panel.build_request_payload())
+
+    def _run_mesh_doctor_repair_from_ui(self) -> None:
+        self._run_mesh_doctor_repair(self.mesh_doctor_panel.build_request_payload())
+
+    def _run_mesh_doctor_analysis(self, payload: dict) -> None:
+        if self.vedo_widget.mesh is None:
+            QMessageBox.information(self, "Mesh Doctor", "Please load a mesh first.")
+            return
+        self.mesh_doctor_panel.set_busy(True, "Analyzing current mesh...")
+        try:
+            check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
+            report = analyze_polydata(self.vedo_widget.mesh.dataset, config=check_config)
+        except Exception as exc:
+            self.mesh_doctor_panel.set_busy(False, "Analysis failed.")
+            QMessageBox.critical(self, "Mesh Doctor", f"Mesh analysis failed.\n\n{exc}")
+            return
+        self.mesh_doctor_panel.set_busy(False)
+        self.mesh_doctor_panel.show_report(report, prefix="Analysis completed.")
+        self.statusBar().showMessage("Mesh Doctor analysis completed")
+
+    def _run_mesh_doctor_repair(self, payload: dict) -> None:
+        if self.vedo_widget.mesh is None:
+            QMessageBox.information(self, "Mesh Doctor", "Please load a mesh first.")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Repair Mesh",
+            (
+                "Repair will replace the current mesh in memory.\n\n"
+                "If the cell count changes, existing labels will be reset. "
+                "Landmarks and undo history will be cleared.\n\n"
+                "Continue?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.mesh_doctor_panel.set_busy(True, "Repairing current mesh...")
+        try:
+            check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
+            options = MeshDoctorRepairOptions(**payload.get("repair_options", {}))
+            result = repair_polydata(
+                self.vedo_widget.mesh.dataset,
+                check_config=check_config,
+                repair_options=options,
+            )
+        except Exception as exc:
+            self.mesh_doctor_panel.set_busy(False, "Repair failed.")
+            QMessageBox.critical(self, "Mesh Doctor", f"Mesh repair failed.\n\n{exc}")
+            return
+
+        repaired_mesh = FileIO._normalize_mesh(vedo.Mesh(result.polydata), Path(self.current_path or "mesh.vtp"))
+        repaired_mesh.filename = self.current_path or getattr(self.vedo_widget.mesh, "filename", "")
+        self._apply_repaired_mesh(repaired_mesh, result)
+        self.mesh_doctor_panel.set_busy(False)
+
+    def _apply_repaired_mesh(self, repaired_mesh, result) -> None:
+        previous_cell_count = int(self.label_engine.size)
+        next_cell_count = int(repaired_mesh.dataset.GetNumberOfCells())
+        preserve_labels = previous_cell_count == next_cell_count
+
+        self.interactor.clear_preview(emit_preview=False)
+        if preserve_labels:
+            next_labels = self.label_engine.label_array.copy()
+            repair_note = "Repair applied. Cell count unchanged, labels preserved."
+        else:
+            next_labels = np.zeros(next_cell_count, dtype=np.int32)
+            repair_note = "Repair applied. Cell count changed, labels were reset."
+
+        self.label_engine.reset(next_labels)
+        self.label_panel.ensure_labels(self.label_engine.unique_labels())
+        self.vedo_widget.set_mesh(repaired_mesh, self.label_engine.label_array, self.colormap)
+        self._reset_landmarks()
+        self._clear_history()
+        self.is_dirty = True
+        self._update_current_status_after_edit()
+
+        operations_text = "\n".join(f"- {item}" for item in result.operations) if result.operations else "- No repair steps were applied."
+        self.mesh_doctor_panel.show_report(result.report, prefix=repair_note)
+        self.mesh_doctor_panel.append_note(f"Operations performed:\n{operations_text}\n\nLandmarks were cleared.")
+        self.statusBar().showMessage(repair_note)
 
     def _base_status_for_work(self, file_path: str | Path) -> str:
         path = Path(str(file_path))

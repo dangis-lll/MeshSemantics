@@ -34,19 +34,13 @@ class MeshDoctorPanel(QWidget):
         self._check_rows = [
             (self.non_manifold_checkbox, self.non_manifold_count_label),
             (self.self_intersection_checkbox, self.self_intersection_count_label),
-            (self.highly_creased_checkbox, self.highly_creased_count_label),
-            (self.spike_checkbox, self.spike_count_label),
             (self.small_component_checkbox, self.small_component_count_label),
-            (self.small_tunnel_checkbox, self.small_tunnel_count_label),
             (self.small_hole_checkbox, self.small_hole_count_label),
             (self.triangle_only_label, self.triangle_count_label),
         ]
         self._option_rows = [
             (self.max_component_size_label, self.max_component_size_spin, self.max_component_size_unit_label),
-            (self.max_tunnel_size_label, self.max_tunnel_size_spin, self.max_tunnel_size_unit_label),
             (self.max_hole_perimeter_label, self.max_hole_perimeter_spin, self.max_hole_perimeter_unit_label),
-            (self.spike_sensitivity_label, self.spike_sensitivity_spin, self.spike_sensitivity_unit_label),
-            (self.expand_level_label, self.expand_level_spin, self.expand_level_unit_label),
         ]
         self._apply_ui_properties()
         self._configure_widgets()
@@ -106,31 +100,37 @@ class MeshDoctorPanel(QWidget):
             label.setStyleSheet("color: #5a7397; min-width: 28px;")
         self.triangle_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.triangle_count_label.setStyleSheet("color: #5a7397; min-width: 28px;")
+        self.caption_label.setText("Mesh Check")
+        if hasattr(self, "report_caption"):
+            self.report_caption.setText("Report")
+        self.highly_creased_checkbox.setChecked(False)
+        self.highly_creased_checkbox.hide()
+        self.highly_creased_count_label.hide()
+        self.spike_checkbox.setChecked(False)
+        self.spike_checkbox.hide()
+        self.spike_count_label.hide()
+        self.small_tunnel_checkbox.setChecked(False)
+        self.small_tunnel_checkbox.hide()
+        self.small_tunnel_count_label.hide()
+        self.spike_sensitivity_label.hide()
+        self.spike_sensitivity_spin.hide()
+        self.spike_sensitivity_unit_label.hide()
+        self.max_tunnel_size_label.hide()
+        self.max_tunnel_size_spin.hide()
+        self.max_tunnel_size_unit_label.hide()
+        self.expand_level_label.hide()
+        self.expand_level_spin.hide()
+        self.expand_level_unit_label.hide()
+        self.merge_points_checkbox.setText("Merge duplicate points")
+        self.fill_holes_checkbox.setText("Fill small holes")
+        self.keep_largest_checkbox.setText("Keep largest component only")
+        self.recompute_normals_checkbox.setText("Recompute normals")
         self._apply_responsive_layout()
 
     def _bind_signals(self) -> None:
         self.analyze_button.clicked.connect(self._emit_analyze_requested)
         self.repair_button.clicked.connect(self._emit_repair_requested)
         self.report_toggle_button.clicked.connect(self._toggle_report)
-
-        auto_widgets = [
-            self.non_manifold_checkbox,
-            self.self_intersection_checkbox,
-            self.highly_creased_checkbox,
-            self.spike_checkbox,
-            self.small_component_checkbox,
-            self.small_tunnel_checkbox,
-            self.small_hole_checkbox,
-            self.max_component_size_spin,
-            self.max_tunnel_size_spin,
-            self.max_hole_perimeter_spin,
-            self.spike_sensitivity_spin,
-            self.expand_level_spin,
-        ]
-        for widget in auto_widgets:
-            signal = getattr(widget, "toggled", None) or getattr(widget, "valueChanged", None)
-            if signal is not None:
-                signal.connect(self._emit_auto_check_if_needed)
 
     def _install_activation_filters(self) -> None:
         self._wheel_block_widgets = [
@@ -173,7 +173,6 @@ class MeshDoctorPanel(QWidget):
             self.fill_holes_checkbox,
             self.keep_largest_checkbox,
             self.recompute_normals_checkbox,
-            self.auto_check_checkbox,
             self.analyze_button,
             self.repair_button,
             self.report_toggle_button,
@@ -197,7 +196,7 @@ class MeshDoctorPanel(QWidget):
 
     def _apply_responsive_layout(self) -> None:
         content_width = max(0, self.scroll_area.viewport().width())
-        self._relayout_checks(single_column=content_width < 430)
+        self._relayout_checks(single_column=True)
         self._relayout_options(compact=content_width < 360)
         self._relayout_actions(vertical=content_width < 360)
 
@@ -240,12 +239,10 @@ class MeshDoctorPanel(QWidget):
     def _relayout_actions(self, vertical: bool) -> None:
         self._clear_layout(self.actions_layout)
         if vertical:
-            self.actions_layout.addWidget(self.auto_check_checkbox)
             self.actions_layout.addWidget(self.analyze_button)
             self.actions_layout.addWidget(self.repair_button)
             return
 
-        self.actions_layout.addWidget(self.auto_check_checkbox)
         self.actions_layout.addWidget(self.analyze_button, 1)
         self.actions_layout.addWidget(self.repair_button, 1)
 
@@ -279,6 +276,7 @@ class MeshDoctorPanel(QWidget):
     def repair_options(self) -> MeshDoctorRepairOptions:
         return MeshDoctorRepairOptions(
             merge_points=self.merge_points_checkbox.isChecked(),
+            remove_small_components=self.small_component_checkbox.isChecked(),
             fill_holes=self.fill_holes_checkbox.isChecked(),
             keep_largest_component=self.keep_largest_checkbox.isChecked(),
             recompute_normals=self.recompute_normals_checkbox.isChecked(),
@@ -309,7 +307,6 @@ class MeshDoctorPanel(QWidget):
             self.fill_holes_checkbox,
             self.keep_largest_checkbox,
             self.recompute_normals_checkbox,
-            self.auto_check_checkbox,
             self.analyze_button,
             self.repair_button,
             self.report_toggle_button,
@@ -319,9 +316,9 @@ class MeshDoctorPanel(QWidget):
             self.status_label.setText(message)
 
     def clear_report(self) -> None:
-        self.status_label.setText("Ready.")
+        self.status_label.setText("Ready for manual analysis.")
         self.stats_label.setText("No mesh analyzed yet.")
-        self.report_edit.setPlainText("Mesh Doctor is ready.")
+        self.report_edit.setPlainText("Use Analyze to inspect the current mesh. Repair only runs safe cleanup steps.")
         self.triangle_count_label.setText("-")
         for label in self._count_labels.values():
             label.setText("-")
@@ -353,8 +350,3 @@ class MeshDoctorPanel(QWidget):
 
     def _emit_repair_requested(self) -> None:
         self.repair_requested.emit(self.build_request_payload())
-
-    def _emit_auto_check_if_needed(self, *_args) -> None:
-        if self._busy or not self.auto_check_checkbox.isChecked():
-            return
-        self._emit_analyze_requested()

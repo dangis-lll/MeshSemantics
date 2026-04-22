@@ -6,7 +6,10 @@ from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
-from vtkmodules.vtkCommonCore import vtkLookupTable
+from vtkmodules.vtkCommonCore import vtkIdTypeArray, vtkLookupTable
+from vtkmodules.vtkCommonDataModel import vtkSelection, vtkSelectionNode
+from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
+from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 try:
@@ -160,6 +163,7 @@ class VedoWidget(QWidget):
         self.selected_control_actor = None
         self.landmark_points_actor = None
         self.selected_landmark_actor = None
+        self.issue_highlight_actor = None
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -185,6 +189,7 @@ class VedoWidget(QWidget):
 
     def set_mesh(self, mesh, labels: np.ndarray, colormap: dict[str, tuple[int, int, int]]) -> None:
         self.plotter.clear()
+        self.issue_highlight_actor = None
         self.mesh = mesh.clone(deep=True)
         self.mesh.filename = getattr(mesh, "filename", "")
         self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1).copy()
@@ -214,6 +219,7 @@ class VedoWidget(QWidget):
         self.selected_control_actor = None
         self.landmark_points_actor = None
         self.selected_landmark_actor = None
+        self.issue_highlight_actor = None
         self.render()
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
@@ -313,6 +319,47 @@ class VedoWidget(QWidget):
             self.plotter.add(self.selected_landmark_actor)
         self.render()
 
+    def highlight_issue_cells(self, cell_ids) -> None:
+        if self.mesh is None:
+            return
+        self._remove_issue_highlight_actor()
+        ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
+        ids = ids[(ids >= 0) & (ids < self.base_labels.size)]
+        if ids.size == 0:
+            self.render()
+            return
+
+        selection_ids = vtkIdTypeArray()
+        for cell_id in np.unique(ids):
+            selection_ids.InsertNextValue(int(cell_id))
+
+        selection_node = vtkSelectionNode()
+        selection_node.SetFieldType(vtkSelectionNode.CELL)
+        selection_node.SetContentType(vtkSelectionNode.INDICES)
+        selection_node.SetSelectionList(selection_ids)
+
+        selection = vtkSelection()
+        selection.AddNode(selection_node)
+
+        extractor = vtkExtractSelection()
+        extractor.SetInputData(0, self.mesh.dataset)
+        extractor.SetInputData(1, selection)
+        extractor.Update()
+
+        geometry = vtkGeometryFilter()
+        geometry.SetInputConnection(extractor.GetOutputPort())
+        geometry.Update()
+
+        issue_polydata = geometry.GetOutput()
+        if issue_polydata is None or issue_polydata.GetNumberOfCells() <= 0:
+            self.render()
+            return
+
+        self.issue_highlight_actor = vedo.Mesh(issue_polydata)
+        self.issue_highlight_actor.c("#ff4fa3").alpha(1.0).lighting("off").linecolor("#ffd3e8").linewidth(2)
+        self.plotter.add(self.issue_highlight_actor)
+        self.render()
+
     def _apply_lookup_table(self, colormap: dict[str, tuple[int, int, int]]) -> None:
         lut = self.lookup_table
         lut.SetTableRange(0.0, 256.0)
@@ -379,6 +426,11 @@ class VedoWidget(QWidget):
                 self.plotter.remove(actor)
         self.landmark_points_actor = None
         self.selected_landmark_actor = None
+
+    def _remove_issue_highlight_actor(self) -> None:
+        if self.issue_highlight_actor is not None:
+            self.plotter.remove(self.issue_highlight_actor)
+        self.issue_highlight_actor = None
 
     def _ensure_interactor_ready(self) -> None:
         if self._interactor_initialized or self.interactor is None:

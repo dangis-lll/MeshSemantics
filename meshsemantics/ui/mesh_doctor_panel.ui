@@ -95,7 +95,7 @@
           <item row="0" column="0" colspan="4">
            <widget class="QLabel" name="caption_label">
             <property name="text">
-             <string>Mesh Doctor</string>
+             <string>Mesh Check</string>
             </property>
            </widget>
           </item>
@@ -438,13 +438,6 @@
           <property name="bottomMargin">
            <number>16</number>
           </property>
-          <item>
-           <widget class="QCheckBox" name="auto_check_checkbox">
-            <property name="text">
-             <string>Auto analyze</string>
-            </property>
-           </widget>
-          </item>
           <item>
            <widget class="QPushButton" name="analyze_button">
             <property name="text">

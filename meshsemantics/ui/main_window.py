@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QDialogButtonBox,
     QLineEdit,
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QAbstractSpinBox,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QToolBar,
@@ -41,6 +43,7 @@ from meshsemantics.core.mesh_doctor import (
     MeshDoctorCheckConfig,
     MeshDoctorRepairOptions,
     analyze_polydata,
+    copy_polydata,
     repair_polydata,
 )
 from meshsemantics.core.project_dataset import (
@@ -123,6 +126,56 @@ class ProjectScanWorker(QObject):
         self.progress.emit(self.request_id, scanned_files, latest_path)
 
 
+class MeshDoctorWorker(QObject):
+    progress = pyqtSignal(int, str)
+    analysis_finished = pyqtSignal(object, object)
+    repair_finished = pyqtSignal(object)
+    failed = pyqtSignal(str, str)
+
+    def __init__(
+        self,
+        mode: str,
+        polydata,
+        check_config: MeshDoctorCheckConfig,
+        repair_options: MeshDoctorRepairOptions | None = None,
+        initial_report=None,
+    ) -> None:
+        super().__init__()
+        self.mode = mode
+        self.polydata = polydata
+        self.check_config = check_config
+        self.repair_options = repair_options
+        self.initial_report = initial_report
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            if self.mode == "analysis":
+                report = analyze_polydata(
+                    self.polydata,
+                    config=self.check_config,
+                    progress_callback=self._emit_progress,
+                )
+                self.analysis_finished.emit(report, self.check_config)
+                return
+            if self.mode == "repair":
+                result = repair_polydata(
+                    self.polydata,
+                    check_config=self.check_config,
+                    repair_options=self.repair_options or MeshDoctorRepairOptions(),
+                    initial_report=self.initial_report,
+                    progress_callback=self._emit_progress,
+                )
+                self.repair_finished.emit(result)
+                return
+            raise ValueError(f"Unsupported mesh doctor mode: {self.mode}")
+        except Exception as exc:
+            self.failed.emit(self.mode, str(exc))
+
+    def _emit_progress(self, value: int, text: str) -> None:
+        self.progress.emit(int(value), str(text))
+
+
 class FloatingActionWindow(QWidget):
     def __init__(self, owner: QWidget) -> None:
         flags = (
@@ -139,6 +192,96 @@ class FloatingActionWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
+
+
+class BusyOverlay(QWidget):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("busy-overlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setStyleSheet("background: transparent;")
+        self.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(0)
+
+        self.card = QFrame(self)
+        self.card.setObjectName("busy-overlay-card")
+        self.card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.card.setStyleSheet(
+            """
+            QFrame#busy-overlay-card {
+                background: rgba(255, 255, 255, 0.88);
+                border: 1px solid rgba(255, 255, 255, 0.72);
+                border-radius: 18px;
+            }
+            QLabel {
+                color: #1f3045;
+                font-size: 14px;
+                font-weight: 600;
+                background: transparent;
+            }
+            QProgressBar {
+                min-height: 18px;
+                max-height: 18px;
+                border-radius: 9px;
+                padding: 0;
+                text-align: center;
+                color: #1f3045;
+                background: rgba(232, 238, 246, 0.94);
+                border: 1px solid rgba(162, 181, 212, 0.34);
+            }
+            QProgressBar::chunk {
+                border-radius: 9px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(49, 130, 246, 0.98),
+                    stop:1 rgba(99, 179, 255, 0.96));
+            }
+            """
+        )
+        self.card.setFixedWidth(360)
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(24, 22, 24, 22)
+        card_layout.setSpacing(14)
+
+        self.title_label = QLabel("Working...", self.card)
+        self.progress_bar = QProgressBar(self.card)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+
+        card_layout.addWidget(self.title_label)
+        card_layout.addWidget(self.progress_bar)
+        layout.addWidget(self.card)
+
+    def set_progress(self, value: int, text: str) -> None:
+        self.progress_bar.setValue(int(max(0, min(100, value))))
+        self.title_label.setText(text)
+        self.card.update()
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        event.accept()
+
+    def wheelEvent(self, event) -> None:
+        event.accept()
+
+    def keyPressEvent(self, event) -> None:
+        event.accept()
+
+    def keyReleaseEvent(self, event) -> None:
+        event.accept()
 
 
 class MainWindow(QMainWindow):
@@ -163,6 +306,9 @@ class MainWindow(QMainWindow):
         self._active_scan_auto_load = True
         self._scan_thread: QThread | None = None
         self._scan_worker: ProjectScanWorker | None = None
+        self._mesh_doctor_thread: QThread | None = None
+        self._mesh_doctor_worker: MeshDoctorWorker | None = None
+        self._busy_overlay_active = False
         self._project_status_root: str | None = None
         self._project_status_by_relative_path: dict[str, str] = {}
         self._project_status_by_work_path: dict[str, str] = {}
@@ -185,11 +331,14 @@ class MainWindow(QMainWindow):
         self.label_panel = LabelPanel(self.colormap, max_label=int(self.settings.get("max_label", 255)))
         self.landmark_panel = LandmarkPanel()
         self.mesh_doctor_panel = MeshDoctorPanel()
+        self._last_mesh_check_report: MeshDoctorReport | None = None
+        self._last_mesh_check_config: MeshDoctorCheckConfig | None = None
         self.panel_dock = PanelDockWidget(self.label_panel, self.landmark_panel, self.mesh_doctor_panel)
         self.interactor = MeshInteractor(self.vedo_widget, self.settings, self)
 
         self._configure_window()
         self._build_toolbar()
+        self._build_busy_overlay()
         self._bind_signals()
         self._bind_shortcuts()
         self.file_panel.set_project(None)
@@ -213,6 +362,11 @@ class MainWindow(QMainWindow):
         self._build_floating_action_bar()
         self.label_panel.set_overwrite_existing_labels(bool(self.settings.get("overwrite_existing_labels", False)))
         self.statusBar().showMessage("Ready")
+
+    def _build_busy_overlay(self) -> None:
+        self._busy_overlay = BusyOverlay(self)
+        self._busy_overlay.hide()
+        self._position_busy_overlay()
 
     def _attach_central_widget(self) -> None:
         layout = self.viewer_layout
@@ -253,6 +407,7 @@ class MainWindow(QMainWindow):
         self.floating_complete_checkbox.clicked.connect(self.toggle_task_completed)
         self.viewer_host.installEventFilter(self)
         self.vedo_widget.installEventFilter(self)
+        self.vedo_widget.canvas.installEventFilter(self)
         self._position_floating_action_bar()
 
     def _position_floating_action_bar(self) -> None:
@@ -261,8 +416,13 @@ class MainWindow(QMainWindow):
         margin = 20
         bar = self._floating_action_window
         host = self.vedo_widget
+        window_handle = self.windowHandle()
         if (
-            not self.isVisible()
+            self._busy_overlay_active
+            or (hasattr(self, "_busy_overlay") and self._busy_overlay.isVisible())
+            or not self.isVisible()
+            or window_handle is None
+            or not window_handle.isExposed()
             or self.windowState() & Qt.WindowState.WindowMinimized
             or not host.isVisible()
         ):
@@ -284,33 +444,153 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._position_floating_action_bar()
+        self._position_busy_overlay()
 
     def moveEvent(self, event) -> None:
         super().moveEvent(event)
         self._position_floating_action_bar()
+        self._position_busy_overlay()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._position_floating_action_bar()
+        QTimer.singleShot(0, self._position_floating_action_bar)
+        self._position_busy_overlay()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if event.type() == event.Type.WindowStateChange:
             self._position_floating_action_bar()
+            self._position_busy_overlay()
 
     def eventFilter(self, watched: QObject, event) -> bool:
+        busy_targets = {
+            getattr(self, "viewer_host", None),
+            getattr(self, "vedo_widget", None),
+            getattr(getattr(self, "vedo_widget", None), "canvas", None),
+        }
+        if self._busy_overlay_active and watched in busy_targets and event.type() in {
+            event.Type.MouseButtonPress,
+            event.Type.MouseButtonRelease,
+            event.Type.MouseButtonDblClick,
+            event.Type.MouseMove,
+            event.Type.Wheel,
+            event.Type.KeyPress,
+            event.Type.KeyRelease,
+            event.Type.Enter,
+            event.Type.Leave,
+            event.Type.FocusIn,
+            event.Type.FocusOut,
+        }:
+            event.accept()
+            return True
         if watched in {
             getattr(self, "viewer_host", None),
             getattr(self, "vedo_widget", None),
+            getattr(getattr(self, "vedo_widget", None), "canvas", None),
         } and event.type() in {event.Type.Resize, event.Type.Show, event.Type.Hide, event.Type.Move}:
             self._position_floating_action_bar()
+            self._position_busy_overlay()
         return super().eventFilter(watched, event)
+
+    def _position_busy_overlay(self) -> None:
+        if hasattr(self, "_busy_overlay"):
+            self._busy_overlay.setGeometry(self.rect())
+
+    def _set_busy_overlay_visible(self, visible: bool, value: int = 0, text: str = "Working...") -> None:
+        if not hasattr(self, "_busy_overlay"):
+            return
+        self._busy_overlay_active = bool(visible)
+        self._busy_overlay.set_progress(value, text)
+        if visible:
+            if hasattr(self, "_floating_action_window"):
+                self._floating_action_window.hide()
+            self._position_busy_overlay()
+            self._busy_overlay.show()
+            self._busy_overlay.raise_()
+            self._busy_overlay.setFocus(Qt.FocusReason.OtherFocusReason)
+        else:
+            self._busy_overlay.hide()
+            self._position_floating_action_bar()
+
+    def _busy_progress_callback(self, value: int, text: str) -> None:
+        self._set_busy_overlay_visible(True, value, text)
+        QApplication.processEvents()
+
+    def _start_mesh_doctor_worker(
+        self,
+        mode: str,
+        check_config: MeshDoctorCheckConfig,
+        repair_options: MeshDoctorRepairOptions | None = None,
+        initial_report=None,
+    ) -> bool:
+        if self._mesh_doctor_thread is not None:
+            QMessageBox.information(self, "Mesh Check", "Mesh Check is already running.")
+            return False
+        if self.vedo_widget.mesh is None:
+            QMessageBox.information(self, "Mesh Check", "Please load a mesh first.")
+            return False
+
+        worker = MeshDoctorWorker(
+            mode=mode,
+            polydata=copy_polydata(self.vedo_widget.mesh.dataset),
+            check_config=check_config,
+            repair_options=repair_options,
+            initial_report=initial_report,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._busy_progress_callback)
+        worker.analysis_finished.connect(self._on_mesh_doctor_analysis_finished)
+        worker.repair_finished.connect(self._on_mesh_doctor_repair_finished)
+        worker.failed.connect(self._on_mesh_doctor_worker_failed)
+        worker.analysis_finished.connect(thread.quit)
+        worker.repair_finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(self._cleanup_mesh_doctor_worker)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._mesh_doctor_worker = worker
+        self._mesh_doctor_thread = thread
+        thread.start()
+        return True
+
+    @pyqtSlot()
+    def _cleanup_mesh_doctor_worker(self) -> None:
+        self._mesh_doctor_worker = None
+        self._mesh_doctor_thread = None
+
+    @pyqtSlot(object, object)
+    def _on_mesh_doctor_analysis_finished(self, report, check_config) -> None:
+        self.mesh_doctor_panel.set_busy(False)
+        self._set_busy_overlay_visible(False)
+        self._last_mesh_check_report = report
+        self._last_mesh_check_config = check_config
+        self._show_mesh_check_report(report, prefix="Manual analysis completed.")
+        self.statusBar().showMessage("Mesh Check analysis completed")
+
+    @pyqtSlot(object)
+    def _on_mesh_doctor_repair_finished(self, result) -> None:
+        self.mesh_doctor_panel.set_busy(False)
+        self._set_busy_overlay_visible(False)
+        repaired_mesh = FileIO._normalize_mesh(vedo.Mesh(result.polydata), Path(self.current_path or "mesh.vtp"))
+        repaired_mesh.filename = self.current_path or getattr(self.vedo_widget.mesh, "filename", "")
+        self._apply_repaired_mesh(repaired_mesh, result)
+
+    @pyqtSlot(str, str)
+    def _on_mesh_doctor_worker_failed(self, mode: str, message: str) -> None:
+        self.mesh_doctor_panel.set_busy(False, "Analysis failed." if mode == "analysis" else "Repair failed.")
+        self._set_busy_overlay_visible(False)
+        title = "Mesh analysis failed." if mode == "analysis" else "Mesh repair failed."
+        QMessageBox.critical(self, "Mesh Check", f"{title}\n\n{message}")
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(28, 28))
         self.addToolBar(toolbar)
+        self.main_toolbar = toolbar
 
         open_file = QAction("Open File", self)
         open_file.triggered.connect(self.open_file_dialog)
@@ -334,6 +614,15 @@ class MainWindow(QMainWindow):
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
+
+        self.model_info_label = QLabel("Model: No model opened | Cells: - | Labels: -", self)
+        self.model_info_label.setProperty("role", "caption")
+        self.model_info_label.setStyleSheet("color: #35506f; padding: 0 8px;")
+        self.model_info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.model_info_label.setMinimumWidth(420)
+        self.model_info_label.setMaximumWidth(900)
+        self.model_info_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        toolbar.addWidget(self.model_info_label)
 
     def _bind_signals(self) -> None:
         app = QApplication.instance()
@@ -1236,6 +1525,32 @@ class MainWindow(QMainWindow):
     def _refresh_stats(self, total_cells: int) -> None:
         labeled = int((self.label_engine.label_array != 0).sum()) if self.label_engine.size else 0
         self.label_panel.refresh_stats(total_cells, labeled)
+        self._refresh_model_info(total_cells=total_cells)
+
+    def _refresh_model_info(self, *, total_cells: int | None = None) -> None:
+        if not hasattr(self, "model_info_label"):
+            return
+        if self.current_path is None and self.vedo_widget.mesh is None:
+            self.model_info_label.setText("Model: No model opened | Cells: - | Labels: -")
+            self.model_info_label.setToolTip("")
+            return
+
+        mesh = self.vedo_widget.mesh
+        cell_count = int(total_cells) if total_cells is not None else None
+        if cell_count is None and mesh is not None:
+            try:
+                cell_count = int(mesh.dataset.GetNumberOfCells())
+            except Exception:
+                cell_count = None
+
+        label_count = 0
+        if self.label_engine.size:
+            label_count = sum(1 for label in self.label_engine.unique_labels() if int(label) != 0)
+
+        path_text = self.current_path or getattr(mesh, "filename", "") or "Unsaved model"
+        display_text = f"Model: {path_text} | Cells: {cell_count if cell_count is not None else '-'} | Labels: {label_count}"
+        self.model_info_label.setText(display_text)
+        self.model_info_label.setToolTip(path_text)
 
     def _consume_loaded_mesh(self, file_path: str, mesh, labels) -> None:
         mesh.filename = file_path
@@ -1245,7 +1560,7 @@ class MainWindow(QMainWindow):
         self.vedo_widget.set_mesh(mesh, self.label_engine.label_array, self.colormap)
         self._reset_landmarks()
         self._autoload_landmarks(file_path)
-        self.mesh_doctor_panel.clear_report()
+        self._invalidate_mesh_check_state()
         self.file_panel.set_busy(False)
         self.is_dirty = False
         self._clear_history()
@@ -1253,7 +1568,7 @@ class MainWindow(QMainWindow):
         status = self._status_for_loaded_file(file_path)
         self._set_current_status(status, persist_only=True)
         self._sync_floating_action_buttons()
-        self.statusBar().showMessage(f"Loaded {Path(file_path).name}")
+        self.statusBar().showMessage("Model loaded")
 
     def _prepare_for_model_switch(self, next_path: str) -> bool:
         if self.current_path is None:
@@ -1348,6 +1663,7 @@ class MainWindow(QMainWindow):
         project_root = self._project_root_or_parent(normalized_target)
         self._remember_last_file(project_root, normalized_target)
         self._refresh_completion_action()
+        self._refresh_model_info()
         self.statusBar().showMessage(f"Saved VTP to {normalized_target}")
         return True
 
@@ -1446,13 +1762,14 @@ class MainWindow(QMainWindow):
         self.vedo_widget.clear_mesh()
         self.label_engine.reset(np.zeros(0, dtype=np.int32))
         self._reset_landmarks()
-        self.mesh_doctor_panel.clear_report()
+        self._invalidate_mesh_check_state()
         self.current_path = None
         self.is_dirty = False
         self._clear_history()
         self._refresh_stats(0)
         self._refresh_completion_action()
         self.file_panel.set_current_path(None)
+        self._refresh_model_info(total_cells=0)
 
     def _run_mesh_doctor_analysis_from_ui(self) -> None:
         self._run_mesh_doctor_analysis(self.mesh_doctor_panel.build_request_payload())
@@ -1461,30 +1778,42 @@ class MainWindow(QMainWindow):
         self._run_mesh_doctor_repair(self.mesh_doctor_panel.build_request_payload())
 
     def _run_mesh_doctor_analysis(self, payload: dict) -> None:
-        if self.vedo_widget.mesh is None:
-            QMessageBox.information(self, "Mesh Doctor", "Please load a mesh first.")
+        if self._mesh_doctor_thread is not None:
+            QMessageBox.information(self, "Mesh Check", "Mesh Check is already running.")
             return
-        self.mesh_doctor_panel.set_busy(True, "Analyzing current mesh...")
-        try:
-            check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
-            report = analyze_polydata(self.vedo_widget.mesh.dataset, config=check_config)
-        except Exception as exc:
-            self.mesh_doctor_panel.set_busy(False, "Analysis failed.")
-            QMessageBox.critical(self, "Mesh Doctor", f"Mesh analysis failed.\n\n{exc}")
-            return
-        self.mesh_doctor_panel.set_busy(False)
-        self.mesh_doctor_panel.show_report(report, prefix="Analysis completed.")
-        self.statusBar().showMessage("Mesh Doctor analysis completed")
+        self.mesh_doctor_panel.set_busy(True, "Running manual mesh analysis...")
+        self._set_busy_overlay_visible(True, 6, "Preparing mesh analysis...")
+        check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
+        if not self._start_mesh_doctor_worker("analysis", check_config):
+            self.mesh_doctor_panel.set_busy(False)
+            self._set_busy_overlay_visible(False)
 
     def _run_mesh_doctor_repair(self, payload: dict) -> None:
-        if self.vedo_widget.mesh is None:
-            QMessageBox.information(self, "Mesh Doctor", "Please load a mesh first.")
+        if self._mesh_doctor_thread is not None:
+            QMessageBox.information(self, "Mesh Check", "Mesh Check is already running.")
+            return
+        check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
+        if self._last_mesh_check_report is None or self._last_mesh_check_config is None:
+            QMessageBox.information(self, "Mesh Check", "Please run Analyze before Safe Cleanup.")
+            return
+        if self._last_mesh_check_config != check_config:
+            QMessageBox.information(self, "Mesh Check", "Analysis settings changed. Please run Analyze again before Safe Cleanup.")
+            return
+        if not self._last_mesh_check_report.issues:
+            self._show_mesh_check_report(
+                self._last_mesh_check_report,
+                prefix="No checked issues were found. Safe cleanup was skipped.",
+            )
+            self.statusBar().showMessage("Mesh Check skipped safe cleanup")
+            QMessageBox.information(self, "Mesh Check", "No checked issues were found, so safe cleanup was not run.")
             return
         reply = QMessageBox.question(
             self,
-            "Repair Mesh",
+            "Safe Cleanup",
             (
-                "Repair will replace the current mesh in memory.\n\n"
+                "Safe cleanup will replace the current mesh in memory.\n\n"
+                "This workflow only runs conservative cleanup steps such as point merge, "
+                "small-component removal, hole fill, and normal recompute.\n\n"
                 "If the cell count changes, existing labels will be reset. "
                 "Landmarks and undo history will be cleared.\n\n"
                 "Continue?"
@@ -1495,24 +1824,17 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.mesh_doctor_panel.set_busy(True, "Repairing current mesh...")
-        try:
-            check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
-            options = MeshDoctorRepairOptions(**payload.get("repair_options", {}))
-            result = repair_polydata(
-                self.vedo_widget.mesh.dataset,
-                check_config=check_config,
-                repair_options=options,
-            )
-        except Exception as exc:
-            self.mesh_doctor_panel.set_busy(False, "Repair failed.")
-            QMessageBox.critical(self, "Mesh Doctor", f"Mesh repair failed.\n\n{exc}")
-            return
-
-        repaired_mesh = FileIO._normalize_mesh(vedo.Mesh(result.polydata), Path(self.current_path or "mesh.vtp"))
-        repaired_mesh.filename = self.current_path or getattr(self.vedo_widget.mesh, "filename", "")
-        self._apply_repaired_mesh(repaired_mesh, result)
-        self.mesh_doctor_panel.set_busy(False)
+        self.mesh_doctor_panel.set_busy(True, "Running safe cleanup...")
+        self._set_busy_overlay_visible(True, 8, "Preparing safe cleanup...")
+        options = MeshDoctorRepairOptions(**payload.get("repair_options", {}))
+        if not self._start_mesh_doctor_worker(
+            "repair",
+            check_config,
+            repair_options=options,
+            initial_report=self._last_mesh_check_report,
+        ):
+            self.mesh_doctor_panel.set_busy(False)
+            self._set_busy_overlay_visible(False)
 
     def _apply_repaired_mesh(self, repaired_mesh, result) -> None:
         previous_cell_count = int(self.label_engine.size)
@@ -1532,13 +1854,26 @@ class MainWindow(QMainWindow):
         self.vedo_widget.set_mesh(repaired_mesh, self.label_engine.label_array, self.colormap)
         self._reset_landmarks()
         self._clear_history()
+        self._invalidate_mesh_check_state()
         self.is_dirty = True
         self._update_current_status_after_edit()
 
         operations_text = "\n".join(f"- {item}" for item in result.operations) if result.operations else "- No repair steps were applied."
-        self.mesh_doctor_panel.show_report(result.report, prefix=repair_note)
-        self.mesh_doctor_panel.append_note(f"Operations performed:\n{operations_text}\n\nLandmarks were cleared.")
+        self.mesh_doctor_panel.append_note(f"{repair_note}\n\nOperations performed:\n{operations_text}\n\nPlease run Analyze again to inspect the cleaned mesh.")
         self.statusBar().showMessage(repair_note)
+
+    def _invalidate_mesh_check_state(self) -> None:
+        self._last_mesh_check_report = None
+        self._last_mesh_check_config = None
+        self.mesh_doctor_panel.clear_report()
+        self.vedo_widget.highlight_issue_cells(())
+
+    def _show_mesh_check_report(self, report, prefix: str | None = None) -> None:
+        self.mesh_doctor_panel.show_report(report, prefix=prefix)
+        issue_cells: set[int] = set()
+        for item in report.issues:
+            issue_cells.update(int(cell_id) for cell_id in item.cell_ids)
+        self.vedo_widget.highlight_issue_cells(sorted(issue_cells))
 
     def _base_status_for_work(self, file_path: str | Path) -> str:
         path = Path(str(file_path))

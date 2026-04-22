@@ -22,7 +22,7 @@ class PanelDockWidget(QDockWidget):
         self.tab_widget.setObjectName("panel-tabs")
         self.tab_widget.addTab(label_panel, "Labels")
         self.tab_widget.addTab(landmark_panel, "Landmarks")
-        self.tab_widget.addTab(mesh_doctor_panel, "Mesh Doctor")
+        self.tab_widget.addTab(mesh_doctor_panel, "Mesh Check")
         self.tab_widget.currentChanged.connect(self._emit_current_panel_changed)
         self.setWidget(self.tab_widget)
 

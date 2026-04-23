@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -65,20 +66,27 @@ class FileIO:
         n_cells = cls._coerce_cell_count(mesh)
         if path.suffix.lower() == ".vtp":
             try:
-                labels = np.asarray(mesh.celldata["Label"]).reshape(-1)
+                labels = np.asarray(mesh.celldata["Label"], dtype=np.int32).reshape(-1)
             except Exception:
-                labels = np.zeros(n_cells, dtype=np.uint8)
+                logging.warning("Mesh %s is missing a readable Label array; defaulting labels to 0.", path)
+                labels = np.zeros(n_cells, dtype=np.int32)
         else:
-            labels = np.zeros(n_cells, dtype=np.uint8)
+            labels = np.zeros(n_cells, dtype=np.int32)
 
         if labels.size != n_cells:
-            resized = np.zeros(n_cells, dtype=np.uint8)
+            logging.warning(
+                "Mesh %s has a Label array of size %s but %s cells; resizing labels to match cell count.",
+                path,
+                labels.size,
+                n_cells,
+            )
+            resized = np.zeros(n_cells, dtype=np.int32)
             copy_count = min(labels.size, n_cells)
             if copy_count:
-                resized[:copy_count] = np.asarray(labels[:copy_count], dtype=np.uint8)
+                resized[:copy_count] = np.asarray(labels[:copy_count], dtype=np.int32)
             labels = resized
 
-        mesh.celldata["Label"] = labels.astype("uint8").reshape(-1, 1)
+        mesh.celldata["Label"] = labels.astype(np.int32).reshape(-1, 1)
         mesh.dataset.GetCellData().SetActiveScalars("Label")
         mesh.dataset.Modified()
         return mesh, labels.astype(np.int32)
@@ -87,7 +95,7 @@ class FileIO:
     def save_vtp(cls, mesh, file_path: str | Path, labels: np.ndarray) -> None:
         path = Path(file_path)
         export_mesh = mesh.clone(deep=True)
-        export_mesh.celldata["Label"] = np.asarray(labels, dtype=np.uint8).reshape(-1, 1)
+        export_mesh.celldata["Label"] = np.asarray(labels, dtype=np.int32).reshape(-1, 1)
 
         cell_data = export_mesh.dataset.GetCellData()
         if cell_data.HasArray("Normals"):

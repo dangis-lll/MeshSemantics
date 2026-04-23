@@ -57,6 +57,7 @@ from meshsemantics.core.project_dataset import (
     compute_next_open_path,
     normalize_path,
     scan_project_dataset,
+    update_entry_status,
 )
 from meshsemantics.core.project_status_store import (
     load_project_statuses,
@@ -567,8 +568,8 @@ class MainWindow(QMainWindow):
         self._set_busy_overlay_visible(False)
         self._last_mesh_check_report = report
         self._last_mesh_check_config = check_config
-        self._show_mesh_check_report(report, prefix="Manual analysis completed.")
-        self.statusBar().showMessage("Mesh Check analysis completed")
+        self._show_mesh_check_report(report, prefix="Check finished.")
+        self.statusBar().showMessage("Check finished")
 
     @pyqtSlot(object)
     def _on_mesh_doctor_repair_finished(self, result) -> None:
@@ -580,10 +581,10 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, str)
     def _on_mesh_doctor_worker_failed(self, mode: str, message: str) -> None:
-        self.mesh_doctor_panel.set_busy(False, "Analysis failed." if mode == "analysis" else "Repair failed.")
+        self.mesh_doctor_panel.set_busy(False, "Check failed." if mode == "analysis" else "Cleanup failed.")
         self._set_busy_overlay_visible(False)
-        title = "Mesh analysis failed." if mode == "analysis" else "Mesh repair failed."
-        QMessageBox.critical(self, "Mesh Check", f"{title}\n\n{message}")
+        title = "Check failed." if mode == "analysis" else "Cleanup failed."
+        QMessageBox.critical(self, "Mesh Check", f"{title}\n\nReason:\n{message}")
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
@@ -615,7 +616,7 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
 
-        self.model_info_label = QLabel("Model: No model opened | Cells: - | Labels: -", self)
+        self.model_info_label = QLabel("Model: No model opened | Cells: - | Labels: - | Mesh: -/-", self)
         self.model_info_label.setProperty("role", "caption")
         self.model_info_label.setStyleSheet("color: #35506f; padding: 0 8px;")
         self.model_info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1127,11 +1128,20 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.file_panel.set_busy(False)
             self._sync_floating_action_buttons()
+            self.project_dataset = self._dataset_with_entry_status(previous_project, normalized_path, STATUS_FAILED)
+            failed_entry = self._project_entry_for_path(normalized_path)
             self._record_status(normalized_path, STATUS_FAILED)
-            self._project_status_by_work_path[normalized_path] = STATUS_FAILED
-            self.project_dataset = previous_project
+            for candidate_path in {
+                normalized_path,
+                normalize_path(failed_entry.work_path) if failed_entry is not None else None,
+                normalize_path(failed_entry.source_path) if failed_entry is not None else None,
+            }:
+                if candidate_path is not None:
+                    self._project_status_by_work_path[candidate_path] = STATUS_FAILED
             self.current_path = previous_path
             self.file_panel.set_project(self.project_dataset)
+            self.file_panel.update_status(normalized_path, STATUS_FAILED)
+            self._refresh_completion_action()
             QMessageBox.critical(self, "Load Failed", f"Failed to load mesh:\n{normalized_path}\n\n{exc}")
             return
 
@@ -1367,8 +1377,12 @@ class MainWindow(QMainWindow):
         )
         if self.label_engine.assign(assignable_ids, self.label_panel.current_label(), overwrite_existing=True):
             self.is_dirty = True
-            self._push_history(before_state)
-            self._update_mesh_view()
+            with self.vedo_widget.render_batch():
+                # The stable post-apply state should not keep the temporary preview selection,
+                # otherwise redo restores the grey preview overlay and hides the applied label.
+                self.interactor.clear_preview()
+                self._push_history(before_state)
+                self._update_mesh_view()
             self._update_current_status_after_edit()
             skipped_count = max(0, int(raw_ids.size) - int(assignable_ids.size))
             message = f"Assigned label {self.label_panel.current_label()} to {int(assignable_ids.size)} cells"
@@ -1377,7 +1391,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message)
         elif raw_ids.size > 0 and not overwrite_existing:
             self.statusBar().showMessage("Selection already has labels. Enable overwrite to replace them.")
-        self.interactor.clear_preview()
+            self.interactor.clear_preview()
 
     def _remap_labels(self, source: int, target: int) -> None:
         before_state = self._capture_history_state()
@@ -1561,7 +1575,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "model_info_label"):
             return
         if self.current_path is None and self.vedo_widget.mesh is None:
-            self.model_info_label.setText("Model: No model opened | Cells: - | Labels: -")
+            self.model_info_label.setText("Model: No model opened | Cells: - | Labels: - | Mesh: -/-")
             self.model_info_label.setToolTip("")
             return
 
@@ -1578,9 +1592,27 @@ class MainWindow(QMainWindow):
             label_count = sum(1 for label in self.label_engine.unique_labels() if int(label) != 0)
 
         path_text = self.current_path or getattr(mesh, "filename", "") or "Unsaved model"
-        display_text = f"Model: {path_text} | Cells: {cell_count if cell_count is not None else '-'} | Labels: {label_count}"
+        project_position = self._current_project_position_text()
+        display_text = (
+            f"Model: {path_text}"
+            f" | Cells: {cell_count if cell_count is not None else '-'}"
+            f" | Labels: {label_count}"
+            f" | Mesh: {project_position}"
+        )
         self.model_info_label.setText(display_text)
         self.model_info_label.setToolTip(path_text)
+
+    def _current_project_position_text(self) -> str:
+        dataset = self.project_dataset
+        current_path = normalize_path(self.current_path)
+        if dataset is None or not dataset.entries:
+            return "-/-"
+        if current_path is None:
+            return f"-/{len(dataset.entries)}"
+        for index, entry in enumerate(dataset.entries, start=1):
+            if normalize_path(entry.work_path) == current_path or normalize_path(entry.source_path) == current_path:
+                return f"{index}/{len(dataset.entries)}"
+        return f"-/{len(dataset.entries)}"
 
     def _consume_loaded_mesh(self, file_path: str, mesh, labels) -> None:
         mesh.filename = file_path
@@ -1743,28 +1775,29 @@ class MainWindow(QMainWindow):
         self.redo_history.clear()
 
     def _restore_history_state(self, state: dict) -> None:
-        self.interactor.clear_preview(emit_preview=False)
-        self.label_engine.label_array = np.asarray(state.get("labels", np.zeros(0, dtype=np.int32)), dtype=np.int32).copy()
-        self.label_panel.restore_state(state.get("label_ui", {}))
-        self.colormap = self.label_panel.colormap()
-        save_colormap(self.colormap)
-        mesh_state = state.get("mesh")
-        if isinstance(mesh_state, dict) and mesh_state.get("polydata") is not None:
-            restored_mesh = FileIO._normalize_mesh(
-                vedo.Mesh(copy_polydata(mesh_state["polydata"])),
-                Path(self.current_path or mesh_state.get("filename") or "mesh.vtp"),
-            )
-            restored_mesh.filename = str(mesh_state.get("filename") or self.current_path or "")
-            self.vedo_widget.set_mesh(restored_mesh, self.label_engine.label_array, self.colormap)
-        else:
-            self.vedo_widget.set_colormap(self.colormap)
-        self.landmarks = deepcopy(state.get("landmarks", []))
-        self.active_landmark_index = int(state.get("active_landmark_index", -1))
-        self.landmark_dirty = bool(state.get("landmark_dirty", False))
-        self.landmark_panel.set_pick_mode(False)
-        self._update_mesh_view()
-        self.interactor.restore_state(state.get("interaction_ui"))
-        self._update_landmark_view()
+        with self.vedo_widget.render_batch():
+            self.interactor.clear_preview(emit_preview=False)
+            self.label_engine.label_array = np.asarray(state.get("labels", np.zeros(0, dtype=np.int32)), dtype=np.int32).copy()
+            self.label_panel.restore_state(state.get("label_ui", {}))
+            self.colormap = self.label_panel.colormap()
+            save_colormap(self.colormap)
+            mesh_state = state.get("mesh")
+            if isinstance(mesh_state, dict) and mesh_state.get("polydata") is not None:
+                restored_mesh = FileIO._normalize_mesh(
+                    vedo.Mesh(copy_polydata(mesh_state["polydata"])),
+                    Path(self.current_path or mesh_state.get("filename") or "mesh.vtp"),
+                )
+                restored_mesh.filename = str(mesh_state.get("filename") or self.current_path or "")
+                self.vedo_widget.set_mesh(restored_mesh, self.label_engine.label_array, self.colormap)
+            else:
+                self.vedo_widget.set_colormap(self.colormap)
+            self.landmarks = deepcopy(state.get("landmarks", []))
+            self.active_landmark_index = int(state.get("active_landmark_index", -1))
+            self.landmark_dirty = bool(state.get("landmark_dirty", False))
+            self.landmark_panel.set_pick_mode(False)
+            self._update_mesh_view()
+            self.interactor.restore_state(state.get("interaction_ui"))
+            self._update_landmark_view()
         self.is_dirty = bool(state.get("is_dirty", False))
         self._update_current_status_after_edit()
 
@@ -1833,10 +1866,10 @@ class MainWindow(QMainWindow):
 
     def _run_mesh_doctor_analysis(self, payload: dict) -> None:
         if self._mesh_doctor_thread is not None:
-            QMessageBox.information(self, "Mesh Check", "Mesh Check is already running.")
+            QMessageBox.information(self, "Mesh Check", "Check already running.")
             return
-        self.mesh_doctor_panel.set_busy(True, "Running manual mesh analysis...")
-        self._set_busy_overlay_visible(True, 6, "Preparing mesh analysis...")
+        self.mesh_doctor_panel.set_busy(True, "Checking mesh...")
+        self._set_busy_overlay_visible(True, 6, "Checking mesh...")
         check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
         if not self._start_mesh_doctor_worker("analysis", check_config):
             self.mesh_doctor_panel.set_busy(False)
@@ -1844,31 +1877,31 @@ class MainWindow(QMainWindow):
 
     def _run_mesh_doctor_repair(self, payload: dict) -> None:
         if self._mesh_doctor_thread is not None:
-            QMessageBox.information(self, "Mesh Check", "Mesh Check is already running.")
+            QMessageBox.information(self, "Mesh Check", "Check already running.")
             return
         check_config = MeshDoctorCheckConfig(**payload.get("check_config", {}))
         if self._last_mesh_check_report is None or self._last_mesh_check_config is None:
-            QMessageBox.information(self, "Mesh Check", "Please run Analyze before Safe Cleanup.")
+            QMessageBox.information(self, "Mesh Check", "Run Analyze first.")
             return
         if self._last_mesh_check_config != check_config:
-            QMessageBox.information(self, "Mesh Check", "Analysis settings changed. Please run Analyze again before Safe Cleanup.")
+            QMessageBox.information(self, "Mesh Check", "Settings changed. Run Analyze again first.")
             return
         if not self._last_mesh_check_report.issues:
             self._show_mesh_check_report(
                 self._last_mesh_check_report,
-                prefix="No checked issues were found. Safe cleanup was skipped.",
+                prefix="No selected problems found. Cleanup skipped.",
             )
-            self.statusBar().showMessage("Mesh Check skipped safe cleanup")
-            QMessageBox.information(self, "Mesh Check", "No checked issues were found, so safe cleanup was not run.")
+            self.statusBar().showMessage("Cleanup skipped")
+            QMessageBox.information(self, "Mesh Check", "No selected problems found.")
             return
         reply = QMessageBox.question(
             self,
             "Safe Cleanup",
             (
-                "Safe cleanup will replace the current mesh in memory.\n\n"
-                "This workflow only runs conservative cleanup steps such as point merge, "
-                "small-component removal, hole fill, and normal recompute.\n\n"
-                "If the cell count changes, existing labels will be reset. "
+                "This will replace the current mesh.\n\n"
+                "It only applies simple fixes, like merging duplicate points, "
+                "removing tiny loose pieces, and filling small holes.\n\n"
+                "If the mesh structure changes, labels will be reset.\n"
                 "Landmarks and undo history will be cleared.\n\n"
                 "Continue?"
             ),
@@ -1878,8 +1911,8 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.mesh_doctor_panel.set_busy(True, "Running safe cleanup...")
-        self._set_busy_overlay_visible(True, 8, "Preparing safe cleanup...")
+        self.mesh_doctor_panel.set_busy(True, "Cleaning mesh...")
+        self._set_busy_overlay_visible(True, 8, "Cleaning mesh...")
         options = MeshDoctorRepairOptions(**payload.get("repair_options", {}))
         if not self._start_mesh_doctor_worker(
             "repair",
@@ -1899,10 +1932,10 @@ class MainWindow(QMainWindow):
         self.interactor.clear_preview(emit_preview=False)
         if preserve_labels:
             next_labels = self.label_engine.label_array.copy()
-            repair_note = "Repair applied. Cell count unchanged, labels preserved."
+            repair_note = "Cleanup done. Labels kept."
         else:
             next_labels = np.zeros(next_cell_count, dtype=np.int32)
-            repair_note = "Repair applied. Cell count changed, labels were reset."
+            repair_note = "Cleanup done. Mesh changed, so labels were reset."
 
         self.label_engine.reset(next_labels)
         self.label_panel.ensure_labels(self.label_engine.unique_labels())
@@ -1913,8 +1946,8 @@ class MainWindow(QMainWindow):
         self._push_history(before_state, include_mesh=True)
         self._update_current_status_after_edit()
 
-        operations_text = "\n".join(f"- {item}" for item in result.operations) if result.operations else "- No repair steps were applied."
-        self.mesh_doctor_panel.append_note(f"{repair_note}\n\nOperations performed:\n{operations_text}\n\nPlease run Analyze again to inspect the cleaned mesh.")
+        operations_text = "\n".join(f"- {item}" for item in result.operations) if result.operations else "- No changes made."
+        self.mesh_doctor_panel.append_note(f"{repair_note}\n\nWhat changed:\n{operations_text}\n\nRun Analyze again to check the result.")
         self.statusBar().showMessage(repair_note)
 
     def _invalidate_mesh_check_state(self) -> None:
@@ -1984,6 +2017,7 @@ class MainWindow(QMainWindow):
     def _persist_project_statuses(self) -> None:
         if self.project_dataset is None:
             return
+        self.project_dataset = self._dataset_with_status_overrides(self.project_dataset)
         self._project_status_root = self.project_dataset.root_path
         self._project_status_by_relative_path = build_relative_status_index(self.project_dataset)
         self._project_status_by_work_path = build_work_path_status_index(self.project_dataset, self._project_status_by_relative_path)
@@ -2426,3 +2460,52 @@ class MainWindow(QMainWindow):
             return normalize_relative_status_key(Path(normalized).relative_to(Path(root)).with_suffix(""))
         except Exception:
             return None
+
+    def _dataset_with_entry_status(
+        self,
+        dataset: ProjectDataset | None,
+        file_path: str | Path,
+        status: str,
+    ) -> ProjectDataset | None:
+        normalized = normalize_path(file_path)
+        if dataset is None or normalized is None:
+            return dataset
+        updated_dataset = update_entry_status(dataset, normalized, status)
+        next_open_path = compute_next_open_path(
+            updated_dataset,
+            {**self._project_status_by_work_path, normalized: status},
+            updated_dataset.current_path,
+        )
+        return ProjectDataset(
+            root_path=updated_dataset.root_path,
+            entries=updated_dataset.entries,
+            current_path=updated_dataset.current_path,
+            next_open_path=next_open_path,
+            suggested_path=updated_dataset.suggested_path,
+        )
+
+    def _dataset_with_status_overrides(self, dataset: ProjectDataset | None) -> ProjectDataset | None:
+        if dataset is None:
+            return None
+        entries = [
+            replace(entry, status=self._project_status_by_work_path.get(entry.work_path, entry.status))
+            for entry in dataset.entries
+        ]
+        next_open_path = compute_next_open_path(
+            ProjectDataset(
+                root_path=dataset.root_path,
+                entries=tuple(entries),
+                current_path=dataset.current_path,
+                next_open_path=dataset.next_open_path,
+                suggested_path=dataset.suggested_path,
+            ),
+            self._project_status_by_work_path,
+            dataset.current_path,
+        )
+        return ProjectDataset(
+            root_path=dataset.root_path,
+            entries=tuple(entries),
+            current_path=dataset.current_path,
+            next_open_path=next_open_path,
+            suggested_path=dataset.suggested_path,
+        )

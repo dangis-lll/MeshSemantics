@@ -316,9 +316,9 @@ class MeshDoctorPanel(QWidget):
             self.status_label.setText(message)
 
     def clear_report(self) -> None:
-        self.status_label.setText("Ready for manual analysis.")
-        self.stats_label.setText("No mesh analyzed yet.")
-        self.report_edit.setPlainText("Use Analyze to inspect the current mesh. Repair only runs safe cleanup steps.")
+        self.status_label.setText("Ready.")
+        self.stats_label.setText("Not checked yet.")
+        self.report_edit.setPlainText("Click Analyze to check the mesh.\nSafe Cleanup only does low-risk fixes.")
         self.triangle_count_label.setText("-")
         for label in self._count_labels.values():
             label.setText("-")
@@ -327,9 +327,9 @@ class MeshDoctorPanel(QWidget):
     def show_report(self, report: MeshDoctorReport, prefix: str | None = None) -> None:
         issue_count = len(report.issues)
         if issue_count == 0:
-            self.status_label.setText(prefix or "No obvious topology issues were found with the current rules.")
+            self.status_label.setText(prefix or "No obvious problems found.")
         else:
-            self.status_label.setText(prefix or f"Found {issue_count} issue(s).")
+            self.status_label.setText(prefix or f"Found {issue_count} problem(s).")
         self.stats_label.setText(
             f"{report.cell_count} cells, {report.point_count} points, {report.triangle_cell_count} triangle cells"
         )

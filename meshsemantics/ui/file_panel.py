@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from PyQt6 import uic
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -198,16 +196,6 @@ class FileTableModel(QAbstractTableModel):
             return self._project.entries[entry_row].work_path
         return None
 
-    def next_path_after(self, path: str | None = None) -> str | None:
-        if self._project is None or not self._visible_entry_rows:
-            return None
-        start_path = path or self._current_path
-        start_row = self._visible_row_by_path.get(start_path, -1) if start_path else -1
-        for visible_row in range(start_row + 1, len(self._visible_entry_rows)):
-            entry_row = self._visible_entry_rows[visible_row]
-            return self._project.entries[entry_row].work_path
-        return None
-
     def set_current_path(self, path: str | None) -> None:
         if path == self._current_path:
             return
@@ -378,7 +366,10 @@ class FilePanel(QDockWidget):
     def _configure_widgets(self) -> None:
         self.project_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.project_label.setMinimumWidth(0)
+        self.project_label.clear()
+        self.project_label.setVisible(False)
         self.summary_label.setText("")
+        self.summary_label.setVisible(False)
         self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.progress_label.setMinimumWidth(0)
         self.progress_label.setVisible(False)
@@ -412,12 +403,6 @@ class FilePanel(QDockWidget):
     def set_project(self, project: ProjectDataset | None) -> None:
         current_width = self.width()
         self._project = project
-        if project is not None:
-            self.project_label.setText(project.root_path)
-            self.project_label.setToolTip(project.root_path)
-        else:
-            self.project_label.setText("No folder opened")
-            self.project_label.setToolTip("")
         self.model.set_project(project)
         self._update_summary()
         self._restore_selection(project.current_path if project is not None else None)
@@ -520,12 +505,6 @@ class FilePanel(QDockWidget):
     def _sync_buttons(self) -> None:
         return
 
-    def _has_next_model(self) -> bool:
-        selected_path = self.selected_path()
-        if selected_path:
-            return self.model.next_incomplete_path_after(selected_path) is not None
-        return self.model.first_incomplete_path() is not None
-
     def has_previous_model(self) -> bool:
         return self.model.previous_path_before(self.selected_path()) is not None
 
@@ -550,16 +529,7 @@ class FilePanel(QDockWidget):
             self.next_model_requested.emit(next_path)
 
     def _update_summary(self) -> None:
-        total = len(self._project.entries) if self._project is not None else 0
-        visible = self.model.total_rows()
-        loaded = self.model.loaded_rows()
-        if total == 0:
-            self.summary_label.setText("")
-            return
-        if visible == total:
-            self.summary_label.setText(f"{loaded}/{total}")
-            return
-        self.summary_label.setText(f"{loaded}/{visible} shown")
+        self.summary_label.setText("")
 
     def _on_scroll_changed(self, value: int) -> None:
         scroll_bar = self.table.verticalScrollBar()

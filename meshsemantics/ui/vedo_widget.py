@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 import vedo
 from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
@@ -145,6 +147,8 @@ class VedoWidget(QWidget):
         self.render_window = self.canvas.GetRenderWindow()
         self._interactor_initialized = False
         self._render_scheduled = False
+        self._render_batch_depth = 0
+        self._render_pending = False
 
         self.mesh = None
         self.base_labels = np.zeros(0, dtype=np.int32)
@@ -257,12 +261,26 @@ class VedoWidget(QWidget):
         self.render()
 
     def render(self) -> None:
+        if self._render_batch_depth > 0:
+            self._render_pending = True
+            return
         self._ensure_interactor_ready()
         if self.plotter.window:
             self.plotter.render()
         if self.render_window is not None:
             self.render_window.Render()
         self.canvas.update()
+
+    @contextmanager
+    def render_batch(self):
+        self._render_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._render_batch_depth = max(0, self._render_batch_depth - 1)
+            if self._render_batch_depth == 0 and self._render_pending:
+                self._render_pending = False
+                self.render()
 
     def set_control_points(self, payload) -> None:
         if self.mesh is None:
@@ -442,6 +460,9 @@ class VedoWidget(QWidget):
         self._interactor_initialized = True
 
     def _schedule_render(self) -> None:
+        if self._render_batch_depth > 0:
+            self._render_pending = True
+            return
         if self._render_scheduled:
             return
         self._render_scheduled = True

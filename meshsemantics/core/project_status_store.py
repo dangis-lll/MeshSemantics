@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from pathlib import Path
 
 
@@ -39,7 +40,8 @@ def load_project_statuses(root: str | Path) -> dict[str, str]:
                     if normalized_key is None:
                         continue
                     statuses[normalized_key] = status
-        except Exception:
+        except Exception as exc:
+            logging.warning("Failed to load project status table from %s: %s", table_path, exc)
             continue
         return statuses
     return {}
@@ -48,7 +50,8 @@ def load_project_statuses(root: str | Path) -> dict[str, str]:
 def save_project_statuses(root: str | Path, status_by_relative_path: dict[str, str]) -> None:
     table_path = status_table_path(root)
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    with table_path.open("w", encoding="utf-8", newline="") as handle:
+    temp_path = table_path.with_name(f".{table_path.name}.tmp")
+    with temp_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["relative_path", "status"])
         for relative_path, status in sorted(status_by_relative_path.items()):
@@ -58,3 +61,4 @@ def save_project_statuses(root: str | Path, status_by_relative_path: dict[str, s
             if normalized_key is None:
                 continue
             writer.writerow([normalized_key, status])
+    temp_path.replace(table_path)

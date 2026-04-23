@@ -50,6 +50,7 @@ class LabelPanel(QWidget):
         self.setObjectName("label-panel")
         self._colormap = dict(colormap)
         self._is_completed = False
+        self._configured_max_label = max(0, int(max_label))
         self._manual_label_column_width: int | None = None
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
@@ -182,10 +183,10 @@ class LabelPanel(QWidget):
             self.table.setItem(row, 1, color_item)
         self.table.blockSignals(False)
 
-        max_existing_label = self._max_existing_label()
-        self.label_spin.setRange(0, max_existing_label)
-        self.swap_a.setRange(0, max_existing_label)
-        self.swap_b.setRange(0, max_existing_label)
+        max_label = max(self._configured_max_label, self._max_existing_label())
+        self.label_spin.setRange(0, max_label)
+        self.swap_a.setRange(0, max_label)
+        self.swap_b.setRange(0, max_label)
         self._apply_table_column_widths()
         self._select_row_for_label(self.current_label())
         self._refresh_chip()

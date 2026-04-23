@@ -1,58 +1,122 @@
 # MeshSemantics
 
-![image](doc/demo.png)
+![MeshSemantics Labeling View](doc/label.png)
 
 [中文说明](./README_zh.md)
 
-MeshSemantics is a desktop application for interactive mesh annotation. It combines semantic face labeling and landmark editing in one workflow, so you can inspect triangle meshes, annotate regions, place named landmarks, and export results for downstream analysis or dataset production.
+MeshSemantics is a desktop application for interactive triangle-mesh annotation and inspection. It combines semantic face labeling, landmark editing, project progress tracking, and mesh quality checking in one workflow, so you can move from raw meshes to clean, exportable annotation results without switching tools.
 
-The app is built with `Python + PyQt6 + vedo + VTK` and is currently oriented toward batch-processing folders of `STL` / `VTP` meshes with persistent task progress.
+The app is built with `Python + PyQt6 + vedo + VTK` and is designed for practical day-to-day work on folders of `STL` and `VTP` meshes.
 
-## Features
+## Highlights
 
-- Open a single mesh file or scan a whole project folder
-- Work with `STL` and `VTP` triangle meshes in an interactive 3D viewport
-- Annotate semantic regions by:
-  - right-click single-face picking
-  - spline-based surface selection with preview
-- Edit label colors, add new labels, remap labels, and delete labels
-- Optional overwrite mode when assigning labels onto already labeled faces
-- Undo and redo both label edits and landmark edits
-- Maintain landmark lists per mesh:
-  - add, rename, select, and delete landmarks
-  - pick landmark positions directly on the mesh
-  - double click the mesh in landmark mode to create a named point
-  - auto-load `*.landmarks.json` beside the current mesh when available
-- Save outputs as:
-  - labeled `VTP`
-  - label `JSON`
-  - landmark `JSON`
-  - per-label split `STL`
-- Track project task states with filtering and next-item navigation
-- Remove missing or unwanted entries from the task list, or delete local files from disk
-- Remember the last opened folder and last visited file in a project
+- Open a single mesh or scan a whole project folder
+- View and annotate `STL` / `VTP` triangle meshes in an interactive 3D viewport
+- Label faces with:
+  - right-click single-face toggling
+  - spline-based surface-loop selection with live preview
+- Manage labels by adding, deleting, recoloring, and remapping IDs
+- Support overwrite mode when assigning onto already labeled cells
+- Undo and redo label edits and landmark edits
+- Manage named landmarks per mesh and place them directly on the surface
+- Automatically load `*.landmarks.json` next to the current mesh when available
+- Run manual `Mesh Check` analysis for common topology issues
+- Apply safe cleanup steps such as duplicate-point merge, small-hole fill, and small-component removal
+- Export labeled meshes and metadata to `VTP`, label `JSON`, landmark `JSON`, and per-label split `STL`
+- Track task states across a project folder and jump to the next unfinished model
+
+## Screenshots
+
+### Labeling
+
+![Label Panel](doc/label.png)
+
+### Landmarks
+
+![Landmark Panel](doc/landmark.png)
+
+### Mesh Check
+
+![Mesh Check Panel](doc/meshdoctor.png)
+
+## Main Features
+
+### 1. Semantic Labeling
+
+- Right click faces to add or remove them from the current selection
+- Press `E` to apply the active label to the previewed selection
+- Double click a labeled face to load that label into the current label selector
+- Use spline mode to draw a closed surface contour directly on the mesh
+- Insert and delete spline control points while refining the boundary
+- Toggle overwrite mode if you want to relabel already assigned regions
+
+### 2. Label Management
+
+- Create new label IDs
+- Delete label IDs that are no longer needed
+- Edit label colors
+- Remap one label ID to another
+- Keep a consistent color map across sessions
+
+### 3. Landmark Editing
+
+- Create, rename, select, and delete named landmarks
+- Click `Pick On Mesh` and place the active landmark with a surface click
+- Double click the mesh in landmark mode to create a landmark at that position
+- Avoid duplicate names by reusing, overwriting, or creating a copy name
+- Import landmark JSON and export `*.landmarks.json`
+
+### 4. Mesh Check And Safe Cleanup
+
+The `Mesh Check` tab adds a lightweight mesh-inspection workflow directly inside the app.
+
+- Manual analysis can report:
+  - non-manifold edges
+  - self-intersections
+  - small connected components
+  - small holes
+  - triangle-cell count
+- The report panel summarizes detected issues and affected-face counts
+- Safe cleanup can optionally:
+  - merge duplicate points
+  - remove small components
+  - fill small holes
+  - keep only the largest component
+  - recompute normals
+
+If cleanup changes cell count, labels are reset and landmarks/undo history are cleared so exported data stays consistent with the repaired mesh.
+
+### 5. Project Workflow
+
+- Scan a folder into a task list
+- Filter tasks by text and status
+- Track `Unlabeled`, `In Progress`, `Completed`, and `Failed`
+- Jump to previous, next, or next incomplete model
+- Persist project progress so work can be resumed later
+- Remove invalid entries or fall back to the original source file if a generated work file is missing
 
 ## Supported Files
 
-- Input meshes:
-  - `*.stl`
-  - `*.vtp`
-- Output files:
-  - `*.vtp` for labeled meshes
-  - `*.json` for label arrays
-  - `*.landmarks.json` for landmarks
-  - per-label `*.stl` exports
+### Input
 
-### Label JSON
+- `*.stl`
+- `*.vtp`
 
-The label JSON export stores:
+### Output
+
+- `*.vtp` labeled mesh export
+- `*.json` label-array export
+- `*.landmarks.json` landmark export
+- per-label `*.stl` split export
+
+### JSON Layouts
+
+Label JSON contains:
 
 - `cell_count`
 - `labels`
 
-### Landmark JSON
-
-The landmark JSON export stores:
+Landmark JSON contains:
 
 - `landmark_count`
 - `landmarks`
@@ -61,17 +125,18 @@ The landmark JSON export stores:
 
 Landmarks without a picked position are saved with `coordinates: null`.
 
-## Main Interface
+## Interface Overview
 
 - Center: interactive 3D mesh viewport
 - Left panel:
   - project file list
   - search box
-  - task status filter
-  - next incomplete model button
+  - status filter
+  - next-model navigation
 - Right dock:
-  - `Labels` tab for semantic labeling
-  - `Landmarks` tab for landmark management
+  - `Labels`
+  - `Landmarks`
+  - `Mesh Check`
 - Top toolbar:
   - `Open File`
   - `Open Folder`
@@ -79,70 +144,10 @@ Landmarks without a picked position are saved with `coordinates: null`.
   - `Save As`
   - `Clear Selection`
 - Floating viewport actions:
+  - previous model
+  - next model
   - quick save
   - completed toggle
-- Status bar: mode changes, loading progress, save feedback, and interaction hints
-
-## Labeling Workflow
-
-### 1. Single-face Picking
-
-In the `Labels` panel, right click a triangle to toggle it in the current selection.
-
-- Unselected faces become selected
-- Selected faces become deselected
-- Press `E` to apply the active label to the previewed selection
-- Double click a labeled face to load its label into the active label selector
-
-### 2. Spline Surface Selection
-
-Press `S` in the `Labels` panel to enter spline mode.
-
-In spline mode:
-
-- Left click adds control points on the mesh surface
-- Left click near the first control point closes the contour
-- Left click on the preview curve inserts a control point
-- `Enter` builds the surface selection preview
-- `E` applies the preview to the current label
-- `C` clears the current preview
-- `Delete` or `Backspace` removes the highlighted spline control point
-
-The spline selection pipeline is:
-
-1. Pick control points on the mesh surface.
-2. Build a spline through those points.
-3. Snap spline samples back to the surface.
-4. Use the closed surface loop to clip the mesh.
-5. Use the largest connected clipped region as the preview selection.
-
-## Landmark Workflow
-
-Switch to the `Landmarks` tab to manage named points.
-
-- Type a name and press `Enter` or click `Add` to create a landmark
-- If the name already exists, the existing landmark is selected instead of duplicated
-- Double click a landmark row to make it active
-- Click `Pick On Mesh` and then left click the mesh to place the active landmark
-- In landmark mode, double click the mesh to create a new landmark directly at that position
-- If the name entered from the double-click dialog already exists, you can overwrite the old point or create a copy
-- Use `Rename`, `Delete`, and `Import JSON` from the landmark panel as needed
-
-## Project Task Tracking
-
-When you open a folder, MeshSemantics scans supported meshes and builds a task list.
-
-- Task states include:
-  - `Unlabeled`
-  - `In Progress`
-  - `Completed`
-  - `Failed`
-- The list supports search and status filtering
-- `Next Model` jumps to the next incomplete task
-- Completed status is persisted per project folder
-- If a task file is deleted locally, the app can fall back to the original source mesh or remove the entry from the list
-
-Project status is stored in the folder so you can resume work later.
 
 ## Shortcuts
 
@@ -157,46 +162,51 @@ Shortcuts depend on the active right-side panel.
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
 
-### Labels Panel
+### Labels
 
 | Key | Action |
 | --- | --- |
 | `Ctrl+S` | Quick save current mesh as `VTP` |
-| `Ctrl+Shift+S` | Save current labels as `VTP` / `JSON` / `STL` |
+| `Ctrl+Shift+S` | Save current result as `VTP` / `JSON` / `STL` |
 | `S` | Enter spline mode |
 | `Enter` | Build spline preview |
-| `E` | Apply preview to current label |
+| `E` | Apply current preview to the active label |
 | `C` | Clear current preview |
 | `M` | Toggle completed status |
 | `Delete` / `Backspace` | Delete highlighted spline control point |
 
-### Landmarks Panel
+### Landmarks
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Add landmark from the name input |
+| `Enter` | Add landmark from the current input name |
 | `Ctrl+S` | Quick save landmarks as `JSON` |
 | `Ctrl+Shift+S` | Export landmarks as `JSON` |
 | `Delete` / `Backspace` | Delete the active landmark |
 
-When switching from `Labels` to `Landmarks`, any active spline preview is cleared so panel-specific interactions do not conflict.
+### Mesh Check
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+S` | Quick save current mesh as `VTP` |
+| `Ctrl+Shift+S` | Save current result as `VTP` / `JSON` / `STL` |
+| `R` | Run manual analysis |
+| `Ctrl+R` | Run safe cleanup |
 
 ## Typical Workflow
 
-1. Open a single mesh or scan a folder.
-2. Use the left panel to choose the current task.
-3. In `Labels`, assign triangle labels with right click or spline selection.
-4. Quick save to `VTP` as needed.
-5. In `Landmarks`, create named points and pick them on the mesh.
-6. Export landmarks to `*.landmarks.json` when needed.
-7. Export label JSON or split STL files if your downstream pipeline requires them.
-8. Mark the task as completed and move to the next model.
+1. Open one mesh or a project folder.
+2. Pick the current task from the left panel.
+3. Annotate regions in `Labels`.
+4. Save intermediate results with quick save.
+5. Add or import landmarks in `Landmarks`.
+6. Inspect the mesh in `Mesh Check` if quality problems are suspected.
+7. Export `VTP`, label `JSON`, landmark `JSON`, or split `STL` as needed.
+8. Mark the task completed and move to the next model.
 
-## Running the App
+## Running The App
 
-This project is currently validated in the Conda environment `meshlabeler`.
-
-Recommended setup:
+Recommended environment:
 
 ```bash
 conda activate meshlabeler
@@ -208,14 +218,12 @@ Validated interpreter:
 
 - Python `3.10.20`
 
-Validated direct dependencies in `meshlabeler`:
+Validated direct dependencies:
 
 - `numpy==2.2.6`
 - `PyQt6==6.11.0`
 - `vedo==2026.6.1`
 - `vtk==9.6.1`
-
-If you create the environment from scratch, make sure the Python version and the four packages above remain compatible.
 
 ## Project Structure
 
@@ -236,9 +244,9 @@ MeshSemantics/
 
 ## Notes
 
-- `STL` files are treated as unlabeled meshes on load.
-- `VTP` files reuse their `Label` cell data when present.
-- The application favors practical annotation workflow over CAD-grade boundary editing.
+- `STL` is treated as an unlabeled mesh when loaded.
+- `VTP` reuses its `Label` cell data when present.
+- The app is optimized for efficient annotation and inspection workflow, not CAD-grade manual boundary editing.
 
 ## License
 

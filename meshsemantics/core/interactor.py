@@ -130,6 +130,50 @@ class MeshInteractor(QObject):
         self._interaction_context = context
         self._suppress_right_drag = False
 
+    def snapshot_state(self) -> dict:
+        return {
+            "mode": str(self.state.mode),
+            "control_points_3d": [tuple(float(v) for v in point) for point in self.state.control_points_3d],
+            "curve_points_3d": [tuple(float(v) for v in point) for point in self.state.curve_points_3d],
+            "spline_preview_cell_ids": self.state.spline_preview_cell_ids.astype(np.int32).copy(),
+            "manual_cell_ids": tuple(sorted(int(cell_id) for cell_id in self.state.manual_cell_ids)),
+            "excluded_spline_cell_ids": tuple(sorted(int(cell_id) for cell_id in self.state.excluded_spline_cell_ids)),
+            "hover_point_index": int(self.state.hover_point_index),
+            "hover_segment_index": int(self.state.hover_segment_index),
+            "closed": bool(self.state.closed),
+        }
+
+    def restore_state(self, snapshot: dict | None) -> None:
+        if not isinstance(snapshot, dict):
+            self.clear_preview()
+            return
+        self.state = InteractionState(
+            mode=str(snapshot.get("mode", "NORMAL")),
+            control_points_3d=[
+                tuple(float(v) for v in point)
+                for point in snapshot.get("control_points_3d", [])
+            ],
+            curve_points_3d=[
+                tuple(float(v) for v in point)
+                for point in snapshot.get("curve_points_3d", [])
+            ],
+            spline_preview_cell_ids=np.asarray(
+                snapshot.get("spline_preview_cell_ids", np.zeros(0, dtype=np.int32)),
+                dtype=np.int32,
+            ).copy(),
+            manual_cell_ids=set(int(cell_id) for cell_id in snapshot.get("manual_cell_ids", ())),
+            excluded_spline_cell_ids=set(int(cell_id) for cell_id in snapshot.get("excluded_spline_cell_ids", ())),
+            hover_point_index=int(snapshot.get("hover_point_index", -1)),
+            hover_segment_index=int(snapshot.get("hover_segment_index", -1)),
+            closed=bool(snapshot.get("closed", False)),
+        )
+        self.state.left_press_pos = None
+        self.state.left_dragging = False
+        self.state.vtk_drag_started = False
+        self._emit_control_overlay()
+        self._emit_selection_preview()
+        self.mode_changed.emit(self.state.mode)
+
     def eventFilter(self, watched, event) -> bool:
         if watched is not self.vedo_widget.canvas or self.vedo_widget.mesh is None:
             return super().eventFilter(watched, event)

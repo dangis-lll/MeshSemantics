@@ -38,6 +38,7 @@ class LabelPanel(QWidget):
     panel_activated = pyqtSignal()
     label_changed = pyqtSignal(int)
     colormap_changed = pyqtSignal(dict)
+    history_requested = pyqtSignal(object)
     remap_requested = pyqtSignal(int, int)
     delete_requested = pyqtSignal(int)
     overwrite_mode_changed = pyqtSignal(bool)
@@ -212,9 +213,11 @@ class LabelPanel(QWidget):
         return changed
 
     def add_next_label(self) -> None:
+        before_state = self.snapshot_state()
         next_label = self._max_existing_label() + 1
         if self.ensure_label(next_label):
             self.label_spin.setValue(next_label)
+            self.history_requested.emit(before_state)
 
     def remove_label(self, label: int) -> bool:
         key = str(int(label))
@@ -295,7 +298,11 @@ class LabelPanel(QWidget):
         self.delete_requested.emit(label)
 
     def _emit_overwrite_mode_changed(self) -> None:
-        self.overwrite_mode_changed.emit(self.overwrite_existing_labels())
+        enabled = self.overwrite_existing_labels()
+        before_state = self.snapshot_state()
+        before_state["overwrite_existing"] = not enabled
+        self.overwrite_mode_changed.emit(enabled)
+        self.history_requested.emit(before_state)
 
     def _edit_color(self, item: QTableWidgetItem) -> None:
         if item.column() != 1:
@@ -304,11 +311,15 @@ class LabelPanel(QWidget):
         color = QColorDialog.getColor(current, self, "Pick label color")
         if not color.isValid():
             return
+        before_state = self.snapshot_state()
+        self.table.blockSignals(True)
         item.setText(f"{color.red()}, {color.green()}, {color.blue()}")
         item.setBackground(color)
-        self._sync_colormap_from_table()
+        self.table.blockSignals(False)
+        if self._sync_colormap_from_table():
+            self.history_requested.emit(before_state)
 
-    def _sync_colormap_from_table(self) -> None:
+    def _sync_colormap_from_table(self) -> bool:
         next_map = {"_default": self._colormap.get("_default", (220, 220, 80))}
         for row in range(self.table.rowCount()):
             label_item = self.table.item(row, 0)
@@ -325,9 +336,12 @@ class LabelPanel(QWidget):
                 continue
         if "0" not in next_map:
             next_map["0"] = self._colormap.get("0", (204, 204, 204))
+        if next_map == self._colormap:
+            return False
         self._colormap = next_map
         self._refresh_chip()
         self.colormap_changed.emit(self.colormap())
+        return True
 
     def _refresh_chip(self) -> None:
         rgb = self._colormap.get(

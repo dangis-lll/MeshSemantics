@@ -636,6 +636,7 @@ class MainWindow(QMainWindow):
         self.file_panel.next_model_requested.connect(self.load_mesh)
 
         self.label_panel.colormap_changed.connect(self._on_colormap_changed)
+        self.label_panel.history_requested.connect(self._push_label_panel_history)
         self.label_panel.remap_requested.connect(self._remap_labels)
         self.label_panel.delete_requested.connect(self._delete_label)
         self.label_panel.overwrite_mode_changed.connect(self._on_overwrite_mode_changed)
@@ -687,8 +688,20 @@ class MainWindow(QMainWindow):
         self._register_shortcut("E", self, {"label"}, self.interactor.apply_preview, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("C", self, {"label"}, self.interactor.clear_preview, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("M", self, {"label"}, self.toggle_task_completed, enabled_when=self._shortcut_can_use_plain_action)
-        self._register_shortcut(QKeySequence.StandardKey.Undo, self, {"label"}, self.undo)
-        self._register_shortcut(QKeySequence.StandardKey.Redo, self, {"label"}, self.redo)
+        self._register_shortcut(
+            QKeySequence.StandardKey.Undo,
+            self,
+            {"label", "meshdoctor"},
+            self.undo,
+            enabled_when=self._shortcut_can_use_plain_action,
+        )
+        self._register_shortcut(
+            QKeySequence.StandardKey.Redo,
+            self,
+            {"label", "meshdoctor"},
+            self.redo,
+            enabled_when=self._shortcut_can_use_plain_action,
+        )
         self._register_shortcut("R", self, {"meshdoctor"}, self._run_mesh_doctor_analysis_from_ui, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("Ctrl+R", self, {"meshdoctor"}, self._run_mesh_doctor_repair_from_ui, enabled_when=self._shortcut_can_use_plain_action)
 
@@ -722,8 +735,20 @@ class MainWindow(QMainWindow):
             self._handle_landmark_delete_shortcut,
             enabled_when=self._shortcut_can_delete_selection,
         )
-        self._register_shortcut(QKeySequence.StandardKey.Undo, self, {"landmark"}, self.undo)
-        self._register_shortcut(QKeySequence.StandardKey.Redo, self, {"landmark"}, self.redo)
+        self._register_shortcut(
+            QKeySequence.StandardKey.Undo,
+            self,
+            {"landmark"},
+            self.undo,
+            enabled_when=self._shortcut_can_use_plain_action,
+        )
+        self._register_shortcut(
+            QKeySequence.StandardKey.Redo,
+            self,
+            {"landmark"},
+            self.redo,
+            enabled_when=self._shortcut_can_use_plain_action,
+        )
         self._refresh_shortcut_bindings()
 
     def _register_shortcut(
@@ -1392,6 +1417,11 @@ class MainWindow(QMainWindow):
         save_colormap(colormap)
         self.vedo_widget.set_colormap(colormap)
 
+    def _push_label_panel_history(self, before_label_ui: dict) -> None:
+        before_state = self._capture_history_state()
+        before_state["label_ui"] = dict(before_label_ui or {})
+        self._push_history(before_state)
+
     def _on_overwrite_mode_changed(self, enabled: bool) -> None:
         self.settings["overwrite_existing_labels"] = bool(enabled)
         self._schedule_settings_save()
@@ -1677,20 +1707,34 @@ class MainWindow(QMainWindow):
             return Path(self.current_path).with_suffix(".landmarks.json")
         return Path(self.last_open_dir) / "mesh.landmarks.json"
 
-    def _capture_history_state(self) -> dict:
-        return {
+    def _capture_history_state(self, include_mesh: bool = False) -> dict:
+        state = {
             "labels": self.label_engine.label_array.copy(),
             "label_ui": self.label_panel.snapshot_state(),
+            "interaction_ui": self.interactor.snapshot_state(),
             "is_dirty": bool(self.is_dirty),
             "landmarks": deepcopy(self.landmarks),
             "active_landmark_index": int(self.active_landmark_index),
             "landmark_dirty": bool(self.landmark_dirty),
         }
+        if include_mesh:
+            state["mesh"] = self._capture_mesh_history_state()
+        return state
 
-    def _push_history(self, before_state: dict) -> None:
+    def _capture_mesh_history_state(self) -> dict | None:
+        mesh = getattr(self.vedo_widget, "mesh", None)
+        dataset = getattr(mesh, "dataset", None)
+        if dataset is None:
+            return None
+        return {
+            "polydata": copy_polydata(dataset),
+            "filename": str(getattr(mesh, "filename", "") or self.current_path or ""),
+        }
+
+    def _push_history(self, before_state: dict, include_mesh: bool = False) -> None:
         record = HistoryRecord(
             state_before=before_state,
-            state_after=self._capture_history_state(),
+            state_after=self._capture_history_state(include_mesh=include_mesh),
         )
         self.undo_history.append(record)
         undo_limit = max(1, int(self.settings.get("undo_limit", 50)))
@@ -1704,12 +1748,22 @@ class MainWindow(QMainWindow):
         self.label_panel.restore_state(state.get("label_ui", {}))
         self.colormap = self.label_panel.colormap()
         save_colormap(self.colormap)
-        self.vedo_widget.set_colormap(self.colormap)
+        mesh_state = state.get("mesh")
+        if isinstance(mesh_state, dict) and mesh_state.get("polydata") is not None:
+            restored_mesh = FileIO._normalize_mesh(
+                vedo.Mesh(copy_polydata(mesh_state["polydata"])),
+                Path(self.current_path or mesh_state.get("filename") or "mesh.vtp"),
+            )
+            restored_mesh.filename = str(mesh_state.get("filename") or self.current_path or "")
+            self.vedo_widget.set_mesh(restored_mesh, self.label_engine.label_array, self.colormap)
+        else:
+            self.vedo_widget.set_colormap(self.colormap)
         self.landmarks = deepcopy(state.get("landmarks", []))
         self.active_landmark_index = int(state.get("active_landmark_index", -1))
         self.landmark_dirty = bool(state.get("landmark_dirty", False))
         self.landmark_panel.set_pick_mode(False)
         self._update_mesh_view()
+        self.interactor.restore_state(state.get("interaction_ui"))
         self._update_landmark_view()
         self.is_dirty = bool(state.get("is_dirty", False))
         self._update_current_status_after_edit()
@@ -1837,6 +1891,7 @@ class MainWindow(QMainWindow):
             self._set_busy_overlay_visible(False)
 
     def _apply_repaired_mesh(self, repaired_mesh, result) -> None:
+        before_state = self._capture_history_state(include_mesh=True)
         previous_cell_count = int(self.label_engine.size)
         next_cell_count = int(repaired_mesh.dataset.GetNumberOfCells())
         preserve_labels = previous_cell_count == next_cell_count
@@ -1853,9 +1908,9 @@ class MainWindow(QMainWindow):
         self.label_panel.ensure_labels(self.label_engine.unique_labels())
         self.vedo_widget.set_mesh(repaired_mesh, self.label_engine.label_array, self.colormap)
         self._reset_landmarks()
-        self._clear_history()
         self._invalidate_mesh_check_state()
         self.is_dirty = True
+        self._push_history(before_state, include_mesh=True)
         self._update_current_status_after_edit()
 
         operations_text = "\n".join(f"- {item}" for item in result.operations) if result.operations else "- No repair steps were applied."

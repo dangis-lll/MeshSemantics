@@ -323,8 +323,6 @@ class FilePanel(QDockWidget):
         self.panel_frame = content.panel_frame
         self.search_edit = content.search_edit
         self.status_filter = content.status_filter
-        self.project_label = content.project_label
-        self.summary_label = content.summary_label
         self.table = content.table
         self.progress_label = content.progress_label
         self.progress = content.progress
@@ -359,17 +357,9 @@ class FilePanel(QDockWidget):
 
     def _apply_ui_properties(self) -> None:
         self.panel_frame.setProperty("panel", True)
-        self.project_label.setProperty("role", "caption")
-        self.summary_label.setProperty("role", "caption")
         self.progress_label.setProperty("role", "caption")
 
     def _configure_widgets(self) -> None:
-        self.project_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.project_label.setMinimumWidth(0)
-        self.project_label.clear()
-        self.project_label.setVisible(False)
-        self.summary_label.setText("")
-        self.summary_label.setVisible(False)
         self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.progress_label.setMinimumWidth(0)
         self.progress_label.setVisible(False)
@@ -404,7 +394,6 @@ class FilePanel(QDockWidget):
         current_width = self.width()
         self._project = project
         self.model.set_project(project)
-        self._update_summary()
         self._restore_selection(project.current_path if project is not None else None)
         self._sync_buttons()
         if current_width > 0:
@@ -446,7 +435,6 @@ class FilePanel(QDockWidget):
 
     def update_status(self, path: str, status: str) -> None:
         self.model.update_status(path, status)
-        self._update_summary()
         self._sync_buttons()
 
     def _queue_search_text(self) -> None:
@@ -454,13 +442,11 @@ class FilePanel(QDockWidget):
 
     def _apply_search_text(self) -> None:
         self.model.set_filter_text(self.search_edit.text())
-        self._update_summary()
         self._restore_selection(self._project.current_path if self._project is not None else None)
         self._sync_buttons()
 
     def _on_status_filter_changed(self) -> None:
         self.model.set_status_filter(self.status_filter.currentData())
-        self._update_summary()
         self._restore_selection(self._project.current_path if self._project is not None else None)
         self._sync_buttons()
 
@@ -528,14 +514,10 @@ class FilePanel(QDockWidget):
         if next_path is not None:
             self.next_model_requested.emit(next_path)
 
-    def _update_summary(self) -> None:
-        self.summary_label.setText("")
-
     def _on_scroll_changed(self, value: int) -> None:
         scroll_bar = self.table.verticalScrollBar()
         if value >= scroll_bar.maximum() - 8 and self.model.canFetchMore():
             self.model.fetchMore()
-            self._update_summary()
 
     def _on_top_level_changed(self, floating: bool) -> None:
         if floating:

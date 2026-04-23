@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Callable
 
 import numpy as np
@@ -18,16 +17,13 @@ from vtkmodules.vtkFiltersCore import (
 from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
 from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
 from vtkmodules.vtkFiltersModeling import vtkFillHolesFilter
-from vtkmodules.vtkCommonDataModel import vtkCellLocator, vtkPointLocator
+from vtkmodules.vtkCommonDataModel import vtkPointLocator
 
 
 CHECK_TITLES = {
     "non_manifold": "Non-manifold Edges",
     "self_intersection": "Self-intersections",
-    "highly_creased": "Highly Creased Areas",
-    "spike": "Spikes",
     "small_component": "Small Components",
-    "small_tunnel": "Small Tunnels",
     "small_hole": "Small Holes",
 }
 
@@ -36,16 +32,10 @@ CHECK_TITLES = {
 class MeshDoctorCheckConfig:
     non_manifold: bool = True
     self_intersection: bool = True
-    highly_creased: bool = True
-    spike: bool = True
     small_component: bool = True
-    small_tunnel: bool = True
     small_hole: bool = True
     max_component_size: float = 5.0
-    max_tunnel_size: float = 2.5
     max_hole_perimeter: float = 2.5
-    spike_sensitivity: int = 50
-    expand_level: int = 2
 
 
 @dataclass(frozen=True)
@@ -97,10 +87,6 @@ class MeshDoctorRepairResult:
 class _AnalysisContext:
     polydata: vtkPolyData
     adjacency: list[set[int]] | None = None
-    edge_map: dict[tuple[int, int], set[int]] | None = None
-    cell_normals: np.ndarray | None = None
-    cell_centers: np.ndarray | None = None
-    cell_locator: vtkCellLocator | None = None
     triangle_point_ids: np.ndarray | None = None
     triangle_points: np.ndarray | None = None
 
@@ -301,21 +287,9 @@ def _run_single_check(
             config.self_intersection,
             lambda: _check_self_intersection(polydata, _get_adjacency(active_context), active_context),
         ),
-        "highly_creased": (
-            config.highly_creased,
-            lambda: _check_highly_creased(polydata, context=active_context),
-        ),
-        "spike": (
-            config.spike,
-            lambda: _check_spike(polydata, config.spike_sensitivity),
-        ),
         "small_component": (
             config.small_component,
             lambda: _check_small_component(polydata, config.max_component_size),
-        ),
-        "small_tunnel": (
-            config.small_tunnel,
-            lambda: _check_small_tunnel(polydata, config.max_tunnel_size, _get_adjacency(active_context), active_context),
         ),
         "small_hole": (
             config.small_hole,
@@ -330,10 +304,7 @@ def _is_check_enabled(config: MeshDoctorCheckConfig, key: str) -> bool:
     return {
         "non_manifold": config.non_manifold,
         "self_intersection": config.self_intersection,
-        "highly_creased": config.highly_creased,
-        "spike": config.spike,
         "small_component": config.small_component,
-        "small_tunnel": config.small_tunnel,
         "small_hole": config.small_hole,
     }[key]
 
@@ -357,47 +328,6 @@ def _check_non_manifold(polydata: vtkPolyData) -> MeshDoctorCheckResult:
     cell_ids = _map_edge_polydata_to_original_cells(polydata, output)
     detail = "Detected non-manifold edges." if count > 0 else "No non-manifold edges found."
     return MeshDoctorCheckResult("non_manifold", CHECK_TITLES["non_manifold"], count, "error", detail, tuple(cell_ids))
-
-
-def _check_highly_creased(
-    polydata: vtkPolyData,
-    angle_threshold: float = 120.0,
-    context: _AnalysisContext | None = None,
-) -> MeshDoctorCheckResult:
-    active_context = context or _AnalysisContext(polydata=polydata)
-    normals = _get_cell_normals(active_context)
-    edge_map = _get_edge_map(active_context)
-    flagged: set[int] = set()
-    for _, cell_ids in edge_map.items():
-        if len(cell_ids) != 2:
-            continue
-        first, second = tuple(cell_ids)
-        dot = float(np.clip(np.dot(normals[first], normals[second]), -1.0, 1.0))
-        angle = math.degrees(math.acos(dot))
-        if angle >= float(angle_threshold):
-            flagged.add(first)
-            flagged.add(second)
-    count = len(flagged)
-    detail = (
-        f"Marked regions with normal-angle differences greater than {angle_threshold:g}\N{DEGREE SIGN}."
-        if count > 0
-        else "No obviously highly creased areas found."
-    )
-    return MeshDoctorCheckResult("highly_creased", CHECK_TITLES["highly_creased"], count, "warning", detail, tuple(sorted(flagged)))
-
-
-def _check_spike(polydata: vtkPolyData, sensitivity: int) -> MeshDoctorCheckResult:
-    min_angle_threshold = 3.0 + 0.24 * float(max(0, min(100, sensitivity)))
-    context = _AnalysisContext(polydata=polydata)
-    triangle_points = _get_triangle_points_array(context)
-    min_angles = _triangle_min_angles_deg(triangle_points)
-    flagged = np.flatnonzero(min_angles < min_angle_threshold).astype(np.int32).tolist()
-    detail = (
-        f"Used a minimum-angle threshold of {min_angle_threshold:.1f}\N{DEGREE SIGN}."
-        if flagged
-        else "No obvious spikes found."
-    )
-    return MeshDoctorCheckResult("spike", CHECK_TITLES["spike"], len(flagged), "warning", detail, tuple(flagged))
 
 
 def _check_small_component(polydata: vtkPolyData, max_size: float) -> MeshDoctorCheckResult:
@@ -447,50 +377,6 @@ def _check_small_hole(polydata: vtkPolyData, max_perimeter: float) -> MeshDoctor
         detail,
         tuple(sorted(flagged_cells)),
     )
-
-
-def _check_small_tunnel(
-    polydata: vtkPolyData,
-    max_size: float,
-    adjacency: list[set[int]],
-    context: _AnalysisContext | None = None,
-) -> MeshDoctorCheckResult:
-    if polydata.GetNumberOfCells() <= 0:
-        return MeshDoctorCheckResult("small_tunnel", CHECK_TITLES["small_tunnel"], 0, "warning", "The current mesh is empty.", ())
-    active_context = context or _AnalysisContext(polydata=polydata, adjacency=adjacency)
-    normals = _get_cell_normals(active_context)
-    centers = _get_cell_centers(active_context)
-    locator = _get_cell_locator(active_context)
-
-    flagged: set[int] = set()
-    half_length = max(float(max_size), 0.1) * 0.5
-    for cell_id in range(polydata.GetNumberOfCells()):
-        center = centers[cell_id]
-        normal = normals[cell_id]
-        p1 = center - normal * half_length
-        p2 = center + normal * half_length
-        hit_ids = vtkIdList()
-        locator.FindCellsAlongLine(p1.tolist(), p2.tolist(), 1e-6, hit_ids)
-        if hit_ids.GetNumberOfIds() < 2:
-            continue
-        current_adjacent = adjacency[cell_id] | {cell_id}
-        for index in range(hit_ids.GetNumberOfIds()):
-            other_id = int(hit_ids.GetId(index))
-            if other_id in current_adjacent:
-                continue
-            if np.dot(normal, normals[other_id]) > -0.2:
-                continue
-            if np.linalg.norm(center - centers[other_id]) <= float(max_size):
-                flagged.add(cell_id)
-                flagged.add(other_id)
-
-    group_count = _count_groups(flagged, adjacency)
-    detail = (
-        f"Marked narrow regions with a thickness below {float(max_size):g} mm."
-        if group_count
-        else "No obvious small tunnels found."
-    )
-    return MeshDoctorCheckResult("small_tunnel", CHECK_TITLES["small_tunnel"], group_count, "warning", detail, tuple(sorted(flagged)))
 
 
 def _check_self_intersection(
@@ -629,31 +515,6 @@ def _remove_cells(polydata: vtkPolyData, remove_ids: tuple[int, ...] | list[int]
     return output
 
 
-def _expand_cells(
-    polydata: vtkPolyData,
-    seed_ids: tuple[int, ...] | list[int] | set[int],
-    levels: int,
-    context: _AnalysisContext | None = None,
-) -> tuple[int, ...]:
-    expanded = {int(item) for item in seed_ids}
-    if not expanded or levels <= 0:
-        return tuple(sorted(expanded))
-
-    active_context = context or _AnalysisContext(polydata=polydata)
-    adjacency = _get_adjacency(active_context)
-    frontier = set(expanded)
-    for _ in range(int(levels)):
-        next_frontier: set[int] = set()
-        for cell_id in frontier:
-            next_frontier.update(adjacency[cell_id])
-        next_frontier -= expanded
-        if not next_frontier:
-            break
-        expanded.update(next_frontier)
-        frontier = next_frontier
-    return tuple(sorted(expanded))
-
-
 def _build_cell_adjacency(polydata: vtkPolyData) -> list[set[int]]:
     point_to_cells: list[set[int]] = [set() for _ in range(polydata.GetNumberOfPoints())]
     for cell_id in range(polydata.GetNumberOfCells()):
@@ -666,37 +527,6 @@ def _build_cell_adjacency(polydata: vtkPolyData) -> list[set[int]]:
         for cell_id in cells:
             adjacency[cell_id].update(cells - {cell_id})
     return adjacency
-
-
-def _build_edge_to_cells(polydata: vtkPolyData) -> dict[tuple[int, int], set[int]]:
-    edge_map: dict[tuple[int, int], set[int]] = {}
-    for cell_id in range(polydata.GetNumberOfCells()):
-        cell = polydata.GetCell(cell_id)
-        point_count = cell.GetNumberOfPoints()
-        for index in range(point_count):
-            first = int(cell.GetPointId(index))
-            second = int(cell.GetPointId((index + 1) % point_count))
-            edge = (first, second) if first < second else (second, first)
-            edge_map.setdefault(edge, set()).add(cell_id)
-    return edge_map
-
-
-def _cell_normals(polydata: vtkPolyData) -> np.ndarray:
-    with_normals = _compute_normals(polydata)
-    normals_array = with_normals.GetCellData().GetNormals()
-    if normals_array is None or normals_array.GetNumberOfTuples() == 0:
-        return np.zeros((polydata.GetNumberOfCells(), 3), dtype=np.float64)
-    normals = np.asarray(vtk_to_numpy(normals_array), dtype=np.float64).reshape(-1, 3)
-    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
-    lengths[lengths == 0.0] = 1.0
-    return normals / lengths
-
-
-def _cell_centers(polydata: vtkPolyData) -> np.ndarray:
-    context = _AnalysisContext(polydata=polydata)
-    return _get_triangle_points_array(context).mean(axis=1)
-
-
 def _triangle_points(polydata: vtkPolyData, cell_id: int) -> np.ndarray | None:
     cell = polydata.GetCell(int(cell_id))
     if cell is None or cell.GetNumberOfPoints() < 3:
@@ -705,49 +535,6 @@ def _triangle_points(polydata: vtkPolyData, cell_id: int) -> np.ndarray | None:
     for index in range(3):
         points[index] = np.asarray(polydata.GetPoint(cell.GetPointId(index)), dtype=np.float64)
     return points
-
-
-def _triangle_min_angle_deg(points: np.ndarray) -> float:
-    edges = [
-        points[1] - points[0],
-        points[2] - points[1],
-        points[0] - points[2],
-    ]
-
-    def angle(a: np.ndarray, b: np.ndarray) -> float:
-        denom = np.linalg.norm(a) * np.linalg.norm(b)
-        if denom <= 1e-12:
-            return 0.0
-        dot = float(np.clip(np.dot(a, b) / denom, -1.0, 1.0))
-        return math.degrees(math.acos(dot))
-
-    return min(
-        angle(edges[0], -edges[2]),
-        angle(edges[1], -edges[0]),
-        angle(edges[2], -edges[1]),
-    )
-
-
-def _triangle_min_angles_deg(triangle_points: np.ndarray) -> np.ndarray:
-    edge01 = triangle_points[:, 1] - triangle_points[:, 0]
-    edge12 = triangle_points[:, 2] - triangle_points[:, 1]
-    edge20 = triangle_points[:, 0] - triangle_points[:, 2]
-    return np.minimum.reduce(
-        (
-            _vector_angles_deg(edge01, -edge20),
-            _vector_angles_deg(edge12, -edge01),
-            _vector_angles_deg(edge20, -edge12),
-        )
-    )
-
-
-def _vector_angles_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    denom = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
-    safe = np.where(denom <= 1e-12, 1.0, denom)
-    cosines = np.clip(np.sum(a * b, axis=1) / safe, -1.0, 1.0)
-    angles = np.degrees(np.arccos(cosines))
-    angles[denom <= 1e-12] = 0.0
-    return angles
 
 
 def _component_region_map(polydata: vtkPolyData) -> dict[int, list[int]]:
@@ -887,55 +674,10 @@ def _map_edge_polydata_to_original_cells(source: vtkPolyData, edge_polydata: vtk
     return sorted(mapped_cells)
 
 
-def _count_groups(cell_ids: set[int], adjacency: list[set[int]]) -> int:
-    remaining = set(cell_ids)
-    groups = 0
-    while remaining:
-        groups += 1
-        seed = remaining.pop()
-        stack = [seed]
-        while stack:
-            current = stack.pop()
-            neighbors = adjacency[current] & remaining
-            if not neighbors:
-                continue
-            remaining -= neighbors
-            stack.extend(neighbors)
-    return groups
-
-
 def _get_adjacency(context: _AnalysisContext) -> list[set[int]]:
     if context.adjacency is None:
         context.adjacency = _build_cell_adjacency(context.polydata)
     return context.adjacency
-
-
-def _get_edge_map(context: _AnalysisContext) -> dict[tuple[int, int], set[int]]:
-    if context.edge_map is None:
-        context.edge_map = _build_edge_to_cells(context.polydata)
-    return context.edge_map
-
-
-def _get_cell_normals(context: _AnalysisContext) -> np.ndarray:
-    if context.cell_normals is None:
-        context.cell_normals = _cell_normals(context.polydata)
-    return context.cell_normals
-
-
-def _get_cell_centers(context: _AnalysisContext) -> np.ndarray:
-    if context.cell_centers is None:
-        context.cell_centers = _get_triangle_points_array(context).mean(axis=1)
-    return context.cell_centers
-
-
-def _get_cell_locator(context: _AnalysisContext) -> vtkCellLocator:
-    if context.cell_locator is None:
-        locator = vtkCellLocator()
-        locator.SetDataSet(context.polydata)
-        locator.BuildLocator()
-        context.cell_locator = locator
-    return context.cell_locator
-
 
 def _get_triangle_point_ids(context: _AnalysisContext) -> np.ndarray:
     if context.triangle_point_ids is None:

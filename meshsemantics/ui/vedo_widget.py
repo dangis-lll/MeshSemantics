@@ -124,6 +124,8 @@ else:
 
 class VedoWidget(QWidget):
     mesh_loaded = pyqtSignal(int)
+    _LANDMARK_RADIUS_RATIO = 0.0076
+    _LANDMARK_MIN_RADIUS = 1e-3
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -329,11 +331,23 @@ class VedoWidget(QWidget):
             if index == active_index:
                 active_point = point_tuple
 
+        landmark_radius = self._scaled_marker_radius(
+            self._LANDMARK_RADIUS_RATIO,
+            minimum=self._LANDMARK_MIN_RADIUS,
+        )
         if visible_points:
-            self.landmark_points_actor = vedo.Points(np.asarray(visible_points, dtype=np.float64), r=16).c("#ff5c7a")
+            self.landmark_points_actor = self._build_marker_actor(
+                visible_points,
+                landmark_radius,
+                "#ff5c7a",
+            )
             self.plotter.add(self.landmark_points_actor)
         if active_point is not None:
-            self.selected_landmark_actor = vedo.Points(np.asarray([active_point], dtype=np.float64), r=24).c("#ffd166")
+            self.selected_landmark_actor = self._build_marker_actor(
+                [active_point],
+                landmark_radius,
+                "#ffd166",
+            )
             self.plotter.add(self.selected_landmark_actor)
         self.render()
 
@@ -416,6 +430,27 @@ class VedoWidget(QWidget):
         mapper.Modified()
         mapper.Update()
         self.mesh.modified()
+
+    def _scaled_marker_radius(self, ratio: float, minimum: float = 0.0) -> float:
+        if self.mesh is None:
+            return float(max(minimum, 0.0))
+        bounds = getattr(self.mesh, "bounds", None)
+        if callable(bounds):
+            x0, x1, y0, y1, z0, z1 = bounds()
+        else:
+            x0, x1, y0, y1, z0, z1 = self.mesh.dataset.GetBounds()
+        diagonal = float(np.linalg.norm([x1 - x0, y1 - y0, z1 - z0]))
+        radius = diagonal * float(ratio)
+        if not np.isfinite(radius) or radius <= 0.0:
+            radius = float(ratio)
+        return float(max(radius, minimum))
+
+    def _build_marker_actor(self, points, radius: float, color: str):
+        coords = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        spheres = getattr(vedo, "Spheres", None)
+        if callable(spheres):
+            return spheres(coords, r=float(radius)).c(color)
+        return vedo.Points(coords, r=max(1, int(round(radius)))).c(color)
 
     def _rebuild_geometry_cache(self) -> None:
         if self.mesh is None:

@@ -33,6 +33,7 @@ class MeshInteractor(QObject):
     mode_changed = pyqtSignal(str)
     preview_changed = pyqtSignal(object)
     control_points_changed = pyqtSignal(object)
+    history_requested = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
     surface_double_clicked = pyqtSignal(object, int)
     landmark_picked = pyqtSignal(object)
@@ -257,11 +258,13 @@ class MeshInteractor(QObject):
 
     def _handle_spline_left_press(self, x: float, y: float) -> bool:
         display = self._to_vtk_display(x, y)
+        before_snapshot = self.snapshot_state()
         point_index, point_dist = self._find_nearest_control_point(display)
         if point_index == 0 and len(self.state.control_points_3d) >= 3 and point_dist <= self.POINT_HIT_RADIUS_PX:
             self.state.closed = True
             self.state.curve_points_3d = self._build_contour_line_points(closed=True)
             self._emit_control_overlay()
+            self.history_requested.emit(before_snapshot)
             self.message.emit("Contour closed. Press Enter to preview the selection.")
             return True
 
@@ -274,6 +277,7 @@ class MeshInteractor(QObject):
             self.state.control_points_3d.insert(insert_index, world_point)
             self.state.hover_point_index = insert_index
             self._update_curve_preview()
+            self.history_requested.emit(before_snapshot)
             self.message.emit(f"Inserted control point {insert_index + 1}.")
             return True
 
@@ -284,6 +288,7 @@ class MeshInteractor(QObject):
         self.state.hover_point_index = len(self.state.control_points_3d) - 1
         self.state.closed = False
         self._update_curve_preview()
+        self.history_requested.emit(before_snapshot)
         self.message.emit(f"Added control point {len(self.state.control_points_3d)}.")
         return True
 
@@ -344,11 +349,13 @@ class MeshInteractor(QObject):
             index = len(self.state.control_points_3d) - 1
         if index < 0 or index >= len(self.state.control_points_3d):
             return False
+        before_snapshot = self.snapshot_state()
         del self.state.control_points_3d[index]
         self.state.hover_point_index = -1
         if len(self.state.control_points_3d) < 3:
             self.state.closed = False
         self._update_curve_preview()
+        self.history_requested.emit(before_snapshot)
         self.message.emit(f"Removed control point {index + 1}.")
         return True
 

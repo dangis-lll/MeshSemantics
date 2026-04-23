@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import colorsys
+from contextlib import contextmanager
 
 from PyQt6 import uic
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
@@ -52,6 +53,8 @@ class LabelPanel(QWidget):
         self._is_completed = False
         self._configured_max_label = max(0, int(max_label))
         self._manual_label_column_width: int | None = None
+        self._history_block_depth = 0
+        self._last_current_label = 0
         self._checkbox_unchecked_asset = self._asset_url("checkbox-indicator.png")
         self._checkbox_checked_asset = self._asset_url("checkbox-indicator-checked.png")
         uic.loadUi(str(ui_path("label_panel.ui")), self)
@@ -161,9 +164,11 @@ class LabelPanel(QWidget):
         colormap = state.get("colormap", self.colormap())
         current_label = int(state.get("current_label", 0))
         overwrite_existing = bool(state.get("overwrite_existing", False))
-        self.set_colormap(colormap)
-        self.set_overwrite_existing_labels(overwrite_existing)
-        self.label_spin.setValue(current_label)
+        with self._block_history():
+            self.set_colormap(colormap)
+            self.set_overwrite_existing_labels(overwrite_existing)
+            self.label_spin.setValue(current_label)
+        self._last_current_label = self.current_label()
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
         self._colormap = dict(colormap)
@@ -222,7 +227,7 @@ class LabelPanel(QWidget):
 
     def remove_label(self, label: int) -> bool:
         key = str(int(label))
-        if key == "0" or key not in self._colormap:
+        if key not in self._colormap:
             return False
         previous_label = self._previous_existing_label(int(label))
         del self._colormap[key]
@@ -248,11 +253,24 @@ class LabelPanel(QWidget):
 
     def set_current_label(self, label: int, sync_remap_source: bool = True) -> None:
         label = int(label)
-        self.label_spin.setValue(label)
+        with self._block_history():
+            self.label_spin.setValue(label)
         if sync_remap_source:
             self.swap_a.blockSignals(True)
             self.swap_a.setValue(label)
             self.swap_a.blockSignals(False)
+        self._last_current_label = self.current_label()
+
+    @contextmanager
+    def _block_history(self):
+        self._history_block_depth += 1
+        try:
+            yield
+        finally:
+            self._history_block_depth = max(0, self._history_block_depth - 1)
+
+    def _history_blocked(self) -> bool:
+        return self._history_block_depth > 0
 
     def _asset_url(self, filename: str) -> str:
         return asset_path(filename).as_posix()
@@ -294,7 +312,7 @@ class LabelPanel(QWidget):
 
     def _emit_delete_label(self) -> None:
         label = self.selected_table_label()
-        if label <= 0:
+        if label < 0:
             return
         self.delete_requested.emit(label)
 
@@ -335,8 +353,6 @@ class LabelPanel(QWidget):
                 next_map[label] = tuple(max(0, min(255, v)) for v in parts)
             except Exception:
                 continue
-        if "0" not in next_map:
-            next_map["0"] = self._colormap.get("0", (204, 204, 204))
         if next_map == self._colormap:
             return False
         self._colormap = next_map
@@ -352,12 +368,14 @@ class LabelPanel(QWidget):
         self.color_chip.set_rgb(rgb)
 
     def _on_label_value_changed(self, value: int) -> None:
+        value = int(value)
         self._select_row_for_label(value)
         self.swap_a.blockSignals(True)
-        self.swap_a.setValue(int(value))
+        self.swap_a.setValue(value)
         self.swap_a.blockSignals(False)
         self._refresh_chip()
         self.label_changed.emit(value)
+        self._last_current_label = value
 
     def selected_table_label(self) -> int:
         items = self.table.selectedItems()
@@ -375,14 +393,16 @@ class LabelPanel(QWidget):
         label = self.selected_table_label()
         if label == self.current_label():
             return
-        self.label_spin.blockSignals(True)
-        self.label_spin.setValue(label)
-        self.label_spin.blockSignals(False)
+        with self._block_history():
+            self.label_spin.blockSignals(True)
+            self.label_spin.setValue(label)
+            self.label_spin.blockSignals(False)
         self.swap_a.blockSignals(True)
         self.swap_a.setValue(label)
         self.swap_a.blockSignals(False)
         self._refresh_chip()
         self.label_changed.emit(label)
+        self._last_current_label = label
 
     def _select_row_for_label(self, label: int) -> None:
         target = str(int(label))
@@ -398,7 +418,7 @@ class LabelPanel(QWidget):
     def _previous_existing_label(self, label: int) -> int:
         labels = sorted(
             int(key) for key in self._colormap.keys()
-            if key not in {"0", "_default"} and int(key) < int(label)
+            if key != "_default" and int(key) < int(label)
         )
         return labels[-1] if labels else 0
 

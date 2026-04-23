@@ -34,19 +34,13 @@
      <property name="widgetResizable">
       <bool>true</bool>
      </property>
-     <property name="horizontalScrollBarPolicy">
-      <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
-     </property>
-     <property name="verticalScrollBarPolicy">
-      <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
-     </property>
      <widget class="QWidget" name="content_widget">
       <property name="geometry">
        <rect>
         <x>0</x>
         <y>0</y>
         <width>356</width>
-        <height>900</height>
+        <height>760</height>
        </rect>
       </property>
       <layout class="QVBoxLayout" name="content_layout">
@@ -70,9 +64,6 @@
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
          </property>
-         <property name="frameShadow">
-          <enum>QFrame::Shadow::Raised</enum>
-         </property>
          <layout class="QGridLayout" name="checks_layout">
           <property name="leftMargin">
            <number>16</number>
@@ -92,7 +83,7 @@
           <property name="verticalSpacing">
            <number>12</number>
           </property>
-          <item row="0" column="0" colspan="4">
+          <item row="0" column="0" colspan="2">
            <widget class="QLabel" name="caption_label">
             <property name="text">
              <string>Mesh Check</string>
@@ -116,7 +107,7 @@
             </property>
            </widget>
           </item>
-          <item row="1" column="2">
+          <item row="2" column="0">
            <widget class="QCheckBox" name="self_intersection_checkbox">
             <property name="text">
              <string>Self-intersections</string>
@@ -126,42 +117,8 @@
             </property>
            </widget>
           </item>
-          <item row="1" column="3">
-           <widget class="QLabel" name="self_intersection_count_label">
-            <property name="text">
-             <string>-</string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
-           <widget class="QCheckBox" name="highly_creased_checkbox">
-            <property name="text">
-             <string>Highly Creased Areas</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
           <item row="2" column="1">
-           <widget class="QLabel" name="highly_creased_count_label">
-            <property name="text">
-             <string>-</string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="2">
-           <widget class="QCheckBox" name="spike_checkbox">
-            <property name="text">
-             <string>Spikes</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="3">
-           <widget class="QLabel" name="spike_count_label">
+           <widget class="QLabel" name="self_intersection_count_label">
             <property name="text">
              <string>-</string>
             </property>
@@ -184,23 +141,6 @@
             </property>
            </widget>
           </item>
-          <item row="3" column="2">
-           <widget class="QCheckBox" name="small_tunnel_checkbox">
-            <property name="text">
-             <string>Small Tunnels</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="3">
-           <widget class="QLabel" name="small_tunnel_count_label">
-            <property name="text">
-             <string>-</string>
-            </property>
-           </widget>
-          </item>
           <item row="4" column="0">
            <widget class="QCheckBox" name="small_hole_checkbox">
             <property name="text">
@@ -218,14 +158,14 @@
             </property>
            </widget>
           </item>
-          <item row="4" column="2">
+          <item row="5" column="0">
            <widget class="QLabel" name="triangle_only_label">
             <property name="text">
              <string>Triangle Cells</string>
             </property>
            </widget>
           </item>
-          <item row="4" column="3">
+          <item row="5" column="1">
            <widget class="QLabel" name="triangle_count_label">
             <property name="text">
              <string>-</string>
@@ -239,9 +179,6 @@
         <widget class="QFrame" name="options_frame">
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
-         </property>
-         <property name="frameShadow">
-          <enum>QFrame::Shadow::Raised</enum>
          </property>
          <layout class="QGridLayout" name="options_layout">
           <property name="leftMargin">
@@ -280,70 +217,19 @@
            </widget>
           </item>
           <item row="1" column="0">
-           <widget class="QLabel" name="max_tunnel_size_label">
-            <property name="text">
-             <string>Max tunnel size:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QDoubleSpinBox" name="max_tunnel_size_spin"/>
-          </item>
-          <item row="1" column="2">
-           <widget class="QLabel" name="max_tunnel_size_unit_label">
-            <property name="text">
-             <string>mm</string>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
            <widget class="QLabel" name="max_hole_perimeter_label">
             <property name="text">
              <string>Max hole perimeter:</string>
             </property>
            </widget>
           </item>
-          <item row="2" column="1">
+          <item row="1" column="1">
            <widget class="QDoubleSpinBox" name="max_hole_perimeter_spin"/>
           </item>
-          <item row="2" column="2">
+          <item row="1" column="2">
            <widget class="QLabel" name="max_hole_perimeter_unit_label">
             <property name="text">
              <string>mm</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="0">
-           <widget class="QLabel" name="spike_sensitivity_label">
-            <property name="text">
-             <string>Spike sensitivity:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="3" column="1">
-           <widget class="QSpinBox" name="spike_sensitivity_spin"/>
-          </item>
-          <item row="3" column="2">
-           <widget class="QLabel" name="spike_sensitivity_unit_label">
-            <property name="text">
-             <string>%</string>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="0">
-           <widget class="QLabel" name="expand_level_label">
-            <property name="text">
-             <string>Expansion level:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="1">
-           <widget class="QSpinBox" name="expand_level_spin"/>
-          </item>
-          <item row="4" column="2">
-           <widget class="QLabel" name="expand_level_unit_label">
-            <property name="text">
-             <string>steps</string>
             </property>
            </widget>
           </item>
@@ -354,9 +240,6 @@
         <widget class="QFrame" name="repair_options_frame">
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
-         </property>
-         <property name="frameShadow">
-          <enum>QFrame::Shadow::Raised</enum>
          </property>
          <layout class="QVBoxLayout" name="repair_layout">
           <property name="spacing">
@@ -382,12 +265,12 @@
             <property name="checked">
              <bool>true</bool>
             </property>
-           </widget>
+          </widget>
           </item>
           <item>
            <widget class="QCheckBox" name="fill_holes_checkbox">
             <property name="text">
-             <string>Fill holes</string>
+             <string>Fill small holes</string>
             </property>
             <property name="checked">
              <bool>true</bool>
@@ -418,9 +301,6 @@
         <widget class="QFrame" name="actions_frame">
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
-         </property>
-         <property name="frameShadow">
-          <enum>QFrame::Shadow::Raised</enum>
          </property>
          <layout class="QHBoxLayout" name="actions_layout">
           <property name="spacing">
@@ -460,9 +340,6 @@
          <property name="frameShape">
           <enum>QFrame::Shape::StyledPanel</enum>
          </property>
-         <property name="frameShadow">
-          <enum>QFrame::Shadow::Raised</enum>
-         </property>
          <layout class="QVBoxLayout" name="report_layout">
           <property name="spacing">
            <number>8</number>
@@ -501,7 +378,7 @@
             <item>
              <widget class="QLabel" name="report_caption">
               <property name="text">
-               <string>Detailed Results</string>
+               <string>Report</string>
               </property>
              </widget>
             </item>

@@ -25,23 +25,9 @@ class MeshDoctorPanel(QWidget):
         self._count_labels: dict[str, QLabel] = {
             "non_manifold": self.non_manifold_count_label,
             "self_intersection": self.self_intersection_count_label,
-            "highly_creased": self.highly_creased_count_label,
-            "spike": self.spike_count_label,
             "small_component": self.small_component_count_label,
-            "small_tunnel": self.small_tunnel_count_label,
             "small_hole": self.small_hole_count_label,
         }
-        self._check_rows = [
-            (self.non_manifold_checkbox, self.non_manifold_count_label),
-            (self.self_intersection_checkbox, self.self_intersection_count_label),
-            (self.small_component_checkbox, self.small_component_count_label),
-            (self.small_hole_checkbox, self.small_hole_count_label),
-            (self.triangle_only_label, self.triangle_count_label),
-        ]
-        self._option_rows = [
-            (self.max_component_size_label, self.max_component_size_spin, self.max_component_size_unit_label),
-            (self.max_hole_perimeter_label, self.max_hole_perimeter_spin, self.max_hole_perimeter_unit_label),
-        ]
         self._apply_ui_properties()
         self._configure_widgets()
         self._bind_signals()
@@ -63,10 +49,7 @@ class MeshDoctorPanel(QWidget):
     def _configure_widgets(self) -> None:
         for widget in (
             self.max_component_size_spin,
-            self.max_tunnel_size_spin,
             self.max_hole_perimeter_spin,
-            self.spike_sensitivity_spin,
-            self.expand_level_spin,
         ):
             widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             widget.setAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -76,19 +59,9 @@ class MeshDoctorPanel(QWidget):
         self.max_component_size_spin.setDecimals(2)
         self.max_component_size_spin.setValue(5.0)
 
-        self.max_tunnel_size_spin.setRange(0.0, 100000000.0)
-        self.max_tunnel_size_spin.setDecimals(2)
-        self.max_tunnel_size_spin.setValue(2.5)
-
         self.max_hole_perimeter_spin.setRange(0.0, 100000000.0)
         self.max_hole_perimeter_spin.setDecimals(2)
         self.max_hole_perimeter_spin.setValue(2.5)
-
-        self.spike_sensitivity_spin.setRange(0, 100)
-        self.spike_sensitivity_spin.setValue(50)
-
-        self.expand_level_spin.setRange(0, 100)
-        self.expand_level_spin.setValue(2)
 
         self.report_toggle_button.setCheckable(True)
         self.report_toggle_button.setChecked(False)
@@ -101,31 +74,11 @@ class MeshDoctorPanel(QWidget):
         self.triangle_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.triangle_count_label.setStyleSheet("color: #5a7397; min-width: 28px;")
         self.caption_label.setText("Mesh Check")
-        if hasattr(self, "report_caption"):
-            self.report_caption.setText("Report")
-        self.highly_creased_checkbox.setChecked(False)
-        self.highly_creased_checkbox.hide()
-        self.highly_creased_count_label.hide()
-        self.spike_checkbox.setChecked(False)
-        self.spike_checkbox.hide()
-        self.spike_count_label.hide()
-        self.small_tunnel_checkbox.setChecked(False)
-        self.small_tunnel_checkbox.hide()
-        self.small_tunnel_count_label.hide()
-        self.spike_sensitivity_label.hide()
-        self.spike_sensitivity_spin.hide()
-        self.spike_sensitivity_unit_label.hide()
-        self.max_tunnel_size_label.hide()
-        self.max_tunnel_size_spin.hide()
-        self.max_tunnel_size_unit_label.hide()
-        self.expand_level_label.hide()
-        self.expand_level_spin.hide()
-        self.expand_level_unit_label.hide()
+        self.report_caption.setText("Report")
         self.merge_points_checkbox.setText("Merge duplicate points")
         self.fill_holes_checkbox.setText("Fill small holes")
         self.keep_largest_checkbox.setText("Keep largest component only")
         self.recompute_normals_checkbox.setText("Recompute normals")
-        self._apply_responsive_layout()
 
     def _bind_signals(self) -> None:
         self.analyze_button.clicked.connect(self._emit_analyze_requested)
@@ -136,14 +89,8 @@ class MeshDoctorPanel(QWidget):
         self._wheel_block_widgets = [
             self.max_component_size_spin,
             self.max_component_size_spin.lineEdit(),
-            self.max_tunnel_size_spin,
-            self.max_tunnel_size_spin.lineEdit(),
             self.max_hole_perimeter_spin,
             self.max_hole_perimeter_spin.lineEdit(),
-            self.spike_sensitivity_spin,
-            self.spike_sensitivity_spin.lineEdit(),
-            self.expand_level_spin,
-            self.expand_level_spin.lineEdit(),
         ]
         self._activation_widgets = [
             self,
@@ -154,21 +101,12 @@ class MeshDoctorPanel(QWidget):
             self.report_frame,
             self.non_manifold_checkbox,
             self.self_intersection_checkbox,
-            self.highly_creased_checkbox,
-            self.spike_checkbox,
             self.small_component_checkbox,
-            self.small_tunnel_checkbox,
             self.small_hole_checkbox,
             self.max_component_size_spin,
             self.max_component_size_spin.lineEdit(),
-            self.max_tunnel_size_spin,
-            self.max_tunnel_size_spin.lineEdit(),
             self.max_hole_perimeter_spin,
             self.max_hole_perimeter_spin.lineEdit(),
-            self.spike_sensitivity_spin,
-            self.spike_sensitivity_spin.lineEdit(),
-            self.expand_level_spin,
-            self.expand_level_spin.lineEdit(),
             self.merge_points_checkbox,
             self.fill_holes_checkbox,
             self.keep_largest_checkbox,
@@ -190,62 +128,6 @@ class MeshDoctorPanel(QWidget):
             self.panel_activated.emit()
         return super().eventFilter(watched, event)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._apply_responsive_layout()
-
-    def _apply_responsive_layout(self) -> None:
-        content_width = max(0, self.scroll_area.viewport().width())
-        self._relayout_checks(single_column=True)
-        self._relayout_options(compact=content_width < 360)
-        self._relayout_actions(vertical=content_width < 360)
-
-    def _clear_layout(self, layout) -> None:
-        while layout.count():
-            layout.takeAt(0)
-
-    def _relayout_checks(self, single_column: bool) -> None:
-        self._clear_layout(self.checks_layout)
-        if single_column:
-            self.checks_layout.addWidget(self.caption_label, 0, 0, 1, 2)
-            for row, (label_widget, count_widget) in enumerate(self._check_rows, start=1):
-                self.checks_layout.addWidget(label_widget, row, 0)
-                self.checks_layout.addWidget(count_widget, row, 1)
-            return
-
-        self.checks_layout.addWidget(self.caption_label, 0, 0, 1, 4)
-        for index, (label_widget, count_widget) in enumerate(self._check_rows):
-            row = 1 + index // 2
-            column = (index % 2) * 2
-            self.checks_layout.addWidget(label_widget, row, column)
-            self.checks_layout.addWidget(count_widget, row, column + 1)
-
-    def _relayout_options(self, compact: bool) -> None:
-        self._clear_layout(self.options_layout)
-        if compact:
-            row = 0
-            for label_widget, editor_widget, unit_widget in self._option_rows:
-                self.options_layout.addWidget(label_widget, row, 0, 1, 2)
-                self.options_layout.addWidget(editor_widget, row + 1, 0)
-                self.options_layout.addWidget(unit_widget, row + 1, 1)
-                row += 2
-            return
-
-        for row, (label_widget, editor_widget, unit_widget) in enumerate(self._option_rows):
-            self.options_layout.addWidget(label_widget, row, 0)
-            self.options_layout.addWidget(editor_widget, row, 1)
-            self.options_layout.addWidget(unit_widget, row, 2)
-
-    def _relayout_actions(self, vertical: bool) -> None:
-        self._clear_layout(self.actions_layout)
-        if vertical:
-            self.actions_layout.addWidget(self.analyze_button)
-            self.actions_layout.addWidget(self.repair_button)
-            return
-
-        self.actions_layout.addWidget(self.analyze_button, 1)
-        self.actions_layout.addWidget(self.repair_button, 1)
-
     def _toggle_report(self) -> None:
         self._set_report_collapsed(not self.report_toggle_button.isChecked())
 
@@ -261,16 +143,10 @@ class MeshDoctorPanel(QWidget):
         return MeshDoctorCheckConfig(
             non_manifold=self.non_manifold_checkbox.isChecked(),
             self_intersection=self.self_intersection_checkbox.isChecked(),
-            highly_creased=self.highly_creased_checkbox.isChecked(),
-            spike=self.spike_checkbox.isChecked(),
             small_component=self.small_component_checkbox.isChecked(),
-            small_tunnel=self.small_tunnel_checkbox.isChecked(),
             small_hole=self.small_hole_checkbox.isChecked(),
             max_component_size=float(self.max_component_size_spin.value()),
-            max_tunnel_size=float(self.max_tunnel_size_spin.value()),
             max_hole_perimeter=float(self.max_hole_perimeter_spin.value()),
-            spike_sensitivity=int(self.spike_sensitivity_spin.value()),
-            expand_level=int(self.expand_level_spin.value()),
         )
 
     def repair_options(self) -> MeshDoctorRepairOptions:
@@ -293,16 +169,10 @@ class MeshDoctorPanel(QWidget):
         for widget in (
             self.non_manifold_checkbox,
             self.self_intersection_checkbox,
-            self.highly_creased_checkbox,
-            self.spike_checkbox,
             self.small_component_checkbox,
-            self.small_tunnel_checkbox,
             self.small_hole_checkbox,
             self.max_component_size_spin,
-            self.max_tunnel_size_spin,
             self.max_hole_perimeter_spin,
-            self.spike_sensitivity_spin,
-            self.expand_level_spin,
             self.merge_points_checkbox,
             self.fill_holes_checkbox,
             self.keep_largest_checkbox,

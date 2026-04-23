@@ -364,6 +364,9 @@ class MainWindow(QMainWindow):
         self.label_panel.set_overwrite_existing_labels(bool(self.settings.get("overwrite_existing_labels", False)))
         self.statusBar().showMessage("Ready")
 
+    def createPopupMenu(self):
+        return None
+
     def _build_busy_overlay(self) -> None:
         self._busy_overlay = BusyOverlay(self)
         self._busy_overlay.hide()
@@ -617,7 +620,6 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(spacer)
 
         self.model_info_label = QLabel("Model: No model opened | Cells: - | Labels: - | Mesh: -/-", self)
-        self.model_info_label.setProperty("role", "caption")
         self.model_info_label.setStyleSheet("color: #35506f; padding: 0 8px;")
         self.model_info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.model_info_label.setMinimumWidth(420)
@@ -660,6 +662,7 @@ class MainWindow(QMainWindow):
         self.interactor.mode_changed.connect(self._on_mode_changed)
         self.interactor.preview_changed.connect(self.vedo_widget.preview_cells)
         self.interactor.control_points_changed.connect(self.vedo_widget.set_control_points)
+        self.interactor.history_requested.connect(self._push_interaction_history)
         self.interactor.apply_requested.connect(self._apply_cells)
         self.interactor.surface_double_clicked.connect(self._handle_surface_double_click)
         self.interactor.landmark_picked.connect(self._apply_landmark_pick)
@@ -688,7 +691,7 @@ class MainWindow(QMainWindow):
         )
         self._register_shortcut("E", self, {"label"}, self.interactor.apply_preview, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("C", self, {"label"}, self.interactor.clear_preview, enabled_when=self._shortcut_can_use_plain_action)
-        self._register_shortcut("M", self, {"label"}, self.toggle_task_completed, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("M", self, {"label", "landmark"}, self.toggle_task_completed, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut(
             QKeySequence.StandardKey.Undo,
             self,
@@ -1370,12 +1373,14 @@ class MainWindow(QMainWindow):
     def _apply_cells(self, cell_ids) -> None:
         before_state = self._capture_history_state()
         overwrite_existing = self.label_panel.overwrite_existing_labels()
+        current_label = self.label_panel.current_label()
         raw_ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
         assignable_ids = self.label_engine.assignable_cells(
             raw_ids,
             overwrite_existing=overwrite_existing,
         )
-        if self.label_engine.assign(assignable_ids, self.label_panel.current_label(), overwrite_existing=True):
+        applied = self.label_engine.assign(assignable_ids, current_label, overwrite_existing=True)
+        if applied:
             self.is_dirty = True
             with self.vedo_widget.render_batch():
                 # The stable post-apply state should not keep the temporary preview selection,
@@ -1385,10 +1390,18 @@ class MainWindow(QMainWindow):
                 self._update_mesh_view()
             self._update_current_status_after_edit()
             skipped_count = max(0, int(raw_ids.size) - int(assignable_ids.size))
-            message = f"Assigned label {self.label_panel.current_label()} to {int(assignable_ids.size)} cells"
+            message = f"Assigned label {current_label} to {int(assignable_ids.size)} cells"
             if skipped_count > 0 and not overwrite_existing:
                 message = f"{message} | Skipped {skipped_count} labeled cells"
             self.statusBar().showMessage(message)
+        elif raw_ids.size > 0 and current_label == 0:
+            # Applying label 0 can be a no-op on already-unlabeled cells, but the user still
+            # performed an explicit apply action that should undo back to the prior selection.
+            with self.vedo_widget.render_batch():
+                self.interactor.clear_preview()
+                self._push_history(before_state)
+                self._update_mesh_view()
+            self.statusBar().showMessage(f"Applied label 0 to selection ({int(raw_ids.size)} cells)")
         elif raw_ids.size > 0 and not overwrite_existing:
             self.statusBar().showMessage("Selection already has labels. Enable overwrite to replace them.")
             self.interactor.clear_preview()
@@ -1403,11 +1416,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Remapped label {source} to {target}")
 
     def _delete_label(self, label: int) -> None:
-        if label <= 0:
+        if label < 0:
             return
         before_state = self._capture_history_state()
         has_cells = self.vedo_widget.mesh is not None and label in set(self.label_engine.unique_labels())
-        if has_cells:
+        if has_cells and label != 0:
             reply = QMessageBox.question(
                 self,
                 "Delete Label",
@@ -1436,6 +1449,11 @@ class MainWindow(QMainWindow):
         before_state["label_ui"] = dict(before_label_ui or {})
         self._push_history(before_state)
 
+    def _push_interaction_history(self, before_interaction_ui: dict) -> None:
+        before_state = self._capture_history_state()
+        before_state["interaction_ui"] = dict(before_interaction_ui or {})
+        self._push_history(before_state)
+
     def _on_overwrite_mode_changed(self, enabled: bool) -> None:
         self.settings["overwrite_existing_labels"] = bool(enabled)
         self._schedule_settings_save()
@@ -1444,7 +1462,7 @@ class MainWindow(QMainWindow):
         if cell_id < 0 or cell_id >= self.label_engine.size:
             return
         label = int(self.label_engine.label_array[cell_id])
-        if label <= 0:
+        if label < 0:
             return
         self.label_panel.set_current_label(label, sync_remap_source=True)
 
@@ -2104,7 +2122,7 @@ class MainWindow(QMainWindow):
         self.floating_next_model_button.setEnabled(not busy and has_next)
         self.floating_quick_save_button.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setEnabled(has_current and not busy)
-        self.floating_complete_checkbox.setVisible(self.currentPanel == "label")
+        self.floating_complete_checkbox.setVisible(self.currentPanel in {"label", "landmark"})
         if hasattr(self, "_floating_action_window"):
             self.floating_complete_checkbox.updateGeometry()
             self._floating_action_window.layout().invalidate()

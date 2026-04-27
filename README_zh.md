@@ -4,34 +4,39 @@
 
 [English README](./README.md)
 
-MeshSemantics 是一个用于交互式三角网格标注与检查的桌面软件。它把语义面片标注、landmark 特征点编辑、项目进度管理以及网格质量检查整合到同一套流程里，方便你直接从原始网格走到可导出的标注结果，而不用在多个工具之间来回切换。
+MeshSemantics 是一个用于交互式三角网格标注、Landmark 编辑、项目进度跟踪和轻量级网格检查的桌面软件。它面向实际的 `STL` / `VTP` 工作流，适合在一个界面里完成模型打开、区域标注、特征点放置、质量检查和结果导出。
 
-软件基于 `Python + PyQt6 + vedo + VTK` 开发，面向日常的 `STL` / `VTP` 网格处理与批量项目标注工作。
+软件基于 `Python + PyQt6 + vedo + VTK` 开发，当前主要面向 Windows 桌面环境。
 
-## 功能亮点
+## 功能概览
 
-- 支持打开单个模型，或扫描整个项目文件夹
-- 在交互式三维视图中查看和标注 `STL` / `VTP` 三角网格
+- 支持打开单个模型，或扫描整个文件夹生成任务队列
+- 在交互式三维视图中查看和标注 `STL` / `VTP` 网格
 - 支持两种面片标注方式：
   - 右键单面片点选
   - 基于样条闭环的曲面区域选择与预览
-- 支持新增、删除、改色、重映射标签
-- 支持覆盖模式，可直接改写已标注区域
-- 标签编辑和 landmark 编辑都支持撤销 / 重做
-- 支持为每个模型维护命名 landmark，并直接在模型表面拾取位置
-- 可自动加载当前模型旁边已有的 `*.landmarks.json`
-- 内置 `Mesh Check` 手动检查流程，可分析常见拓扑问题
-- 支持安全清理，如合并重复点、填补小孔、移除小连通域
-- 支持导出带标签 `VTP`、标签 `JSON`、landmark `JSON`、按标签拆分的 `STL`
+- 支持新增、删除、改色和重映射标签
+- 支持覆盖模式，可重写已有标签区域
+- 标签编辑、Landmark 编辑和 Mesh Cleanup 都支持撤销 / 重做
+- 支持创建、重命名、删除、导入、导出和拾取命名 Landmark
+- 自动加载当前模型同名的 `*.landmarks.json`
+- 支持通过 `Import Segment` 导入标签 JSON
+- 内置 `Mesh Check`，可检查：
+  - 非流形边
+  - 自相交
+  - 小连通域
+  - 小孔洞
+- 支持低风险清理步骤，如合并重复点、移除小连通域和填补小孔
+- 支持导出带标签的 `VTP`、标签 `JSON`、Landmark `*.landmarks.json` 和按标签拆分的 `STL`
 - 支持项目任务状态管理，并快速跳转到下一个未完成模型
 
 ## 界面截图
 
-### 标签标注
+### Labels
 
 ![标签面板](doc/label.png)
 
-### Landmark 编辑
+### Landmarks
 
 ![Landmark 面板](doc/landmark.png)
 
@@ -39,63 +44,75 @@ MeshSemantics 是一个用于交互式三角网格标注与检查的桌面软件
 
 ![Mesh Check 面板](doc/meshdoctor.png)
 
-## 主要功能
+## 典型流程
 
-### 1. 语义标签标注
+1. 用 `Open File` 打开单个模型，或用 `Open Folder` 扫描整个项目文件夹。
+2. 在左侧任务队列中选择当前模型。
+3. 在 `Labels` 面板中完成区域标注。
+4. 用快速保存把当前结果存成 `VTP`。
+5. 在 `Landmarks` 面板中新增或导入特征点。
+6. 如果怀疑模型存在拓扑问题，在 `Mesh Check` 中执行分析。
+7. 按需导出 `VTP`、标签 `JSON`、Landmark `JSON` 或拆分后的 `STL`。
+8. 将当前任务标记为完成，切换到下一个未完成模型。
 
-- 右键面片可加入或移出当前选择
-- 按 `E` 将当前预览区域应用到活动标签
+## 主要面板
+
+### Labels
+
+- 右键单击面片，将其加入或移出当前选择
+- 按 `E` 将预览区域应用到当前标签
 - 双击已标注面片，可把该面片的标签读入当前标签选择器
-- 支持样条模式，可直接在模型表面绘制闭合轮廓
-- 可在调整边界时插入或删除样条控制点
-- 需要重标已有区域时可开启覆盖模式
+- 按 `S` 进入样条模式
+- 按 `Enter` 生成样条预览，按 `C` 清除预览
+- 开启覆盖模式后，可以直接覆盖已有标签区域
 
-### 2. 标签管理
+### 标签管理
 
 - 新建标签 ID
-- 删除不再需要的标签 ID
+- 删除标签 ID
 - 修改标签颜色
 - 将一个标签 ID 重映射到另一个标签 ID
 - 跨会话保留颜色映射配置
 
-### 3. Landmark 编辑
+### Landmarks
 
-- 新增、重命名、选择、删除命名 landmark
-- 点击 `Pick On Mesh` 后，直接在模型表面放置当前 landmark
-- 在 landmark 模式下双击模型，可在该位置直接创建 landmark
-- 当名称重复时，可复用已有点、覆盖旧点或自动创建副本名称
-- 支持导入 landmark JSON，并导出 `*.landmarks.json`
+- 新增 Landmark 名称
+- 重命名或删除已有 Landmark
+- 在 Landmark 模式下双击模型，可直接在点击位置创建一个 Landmark
+- 点击 `Pick On Mesh` 可为当前选中的 Landmark 拾取模型表面坐标
+- 支持导入和导出 Landmark JSON
+- 如果名称重复，软件会优先复用或更新已有 Landmark，而不是静默重复创建
 
-### 4. Mesh Check 与安全清理
+### Mesh Check
 
-`Mesh Check` 标签页为软件增加了轻量级的网格检查流程。
+`Mesh Check` 是内置在主界面里的轻量级检查和修复流程。
 
-- 手动分析可检查：
+- 可分析当前网格中的：
   - 非流形边
   - 自相交
   - 小连通域
   - 小孔洞
-  - 三角面数量
-- 报告面板会汇总问题类型和受影响面片数量
-- 安全清理可按选项执行：
+- 可在三维视图中高亮受影响面片
+- 右侧面板会显示问题计数和文字报告
+- `Safe Cleanup` 支持：
   - 合并重复点
-  - 删除小连通域
-  - 填补小孔洞
-  - 仅保留最大连通域
+  - 移除小连通域
+  - 填补小孔
+  - 可选仅保留最大连通域
   - 重算法线
 
-如果清理后导致单元数量变化，标签会被重置，同时 landmark 和撤销历史也会被清空，以保证修复后的网格与导出结果保持一致。
+如果清理后网格面片数量发生变化，已有标签会被重置，同时 Landmark 和撤销历史也会清空，以保证修复后的网格与导出结果保持一致。
 
-### 5. 项目工作流
+### 项目任务队列
 
-- 扫描文件夹生成任务列表
-- 按名称和状态过滤任务
-- 跟踪 `Unlabeled`、`In Progress`、`Completed`、`Failed`
-- 支持跳转到上一个、下一个或下一个未完成模型
-- 项目进度会持久化保存，方便下次继续
-- 当生成后的工作文件缺失时，可回退到原始源文件，或移除无效条目
+- 扫描文件夹生成项目数据集
+- 显示 `Unlabeled`、`In Progress`、`Completed`、`Failed` 四种状态
+- 支持按名称或状态过滤
+- 支持跳转到上一个模型或下一个未完成模型
+- 自动持久化每个项目文件夹的处理进度
+- 当生成的 `VTP` 不存在时，尽量回退到原始源模型继续打开
 
-## 支持的文件格式
+## 文件格式
 
 ### 输入
 
@@ -104,61 +121,58 @@ MeshSemantics 是一个用于交互式三角网格标注与检查的桌面软件
 
 ### 输出
 
-- `*.vtp`：带标签的网格
-- `*.json`：标签数组
-- `*.landmarks.json`：landmark 数据
+- 带标签的 `*.vtp`
+- 标签数组 `*.json`
+- Landmark `*.landmarks.json`
 - 按标签拆分的 `*.stl`
 
 ### JSON 结构
 
-标签 JSON 包含：
+标签 JSON：
 
 - `cell_count`
 - `labels`
 
-Landmark JSON 包含：
+Landmark JSON：
 
 - `landmark_count`
 - `landmarks`
-  - `name`
-  - `coordinates`
+- 每个 Landmark 包含 `name` 和 `coordinates`
 
-尚未拾取位置的 landmark 会以 `coordinates: null` 保存。
+尚未放置位置的 Landmark 会保存为 `coordinates: null`。
 
-## 界面组成
+## 工具栏与交互
 
-- 中央区域：交互式三维网格视图
-- 左侧面板：
-  - 项目文件列表
-  - 搜索框
-  - 状态筛选
-  - 模型跳转
-- 右侧停靠面板：
-  - `Labels`
-  - `Landmarks`
-  - `Mesh Check`
-- 顶部工具栏：
-  - `Open File`
-  - `Open Folder`
-  - `Import Segment`
-  - `Save As`
-  - `Clear Selection`
-- 视图浮动操作：
-  - 上一个模型
-  - 下一个模型
-  - 快速保存
-  - 完成状态切换
+顶部工具栏：
+
+- `Open File`
+- `Open Folder`
+- `Import Segment`
+- `Save As`
+- `Clear Selection`
+
+三维视图中的悬浮操作：
+
+- 上一个模型
+- 下一个模型
+- 快速保存
+- 完成状态切换
+
+拖放支持：
+
+- 可直接把 `.stl` 或 `.vtp` 拖入软件打开
+- 在已经打开模型的前提下，也可以把标签 JSON 直接拖入软件导入
 
 ## 快捷键
 
-快捷键会根据右侧当前激活的面板变化。
+快捷键会随右侧当前激活的面板而变化。
 
 ### 全局
 
 | 按键 | 功能 |
 | --- | --- |
 | `B` | 打开上一个模型 |
-| `N` | 打开下一个模型 |
+| `N` | 打开下一个未完成模型 |
 | `Ctrl+Z` | 撤销 |
 | `Ctrl+Y` | 重做 |
 
@@ -167,58 +181,41 @@ Landmark JSON 包含：
 | 按键 | 功能 |
 | --- | --- |
 | `Ctrl+S` | 快速保存当前网格为 `VTP` |
-| `Ctrl+Shift+S` | 另存当前结果为 `VTP` / `JSON` / `STL` |
+| `Ctrl+Shift+S` | 导出当前结果为 `VTP` / `JSON` / `STL` |
 | `S` | 进入样条模式 |
 | `Enter` | 生成样条预览 |
-| `E` | 将当前预览应用到活动标签 |
-| `C` | 清除当前预览 |
+| `E` | 将预览应用到当前标签 |
+| `C` | 清除预览 |
 | `M` | 切换完成状态 |
-| `Delete` / `Backspace` | 删除高亮样条控制点 |
+| `Delete` / `Backspace` | 删除高亮的样条控制点 |
 
 ### Landmarks
 
 | 按键 | 功能 |
 | --- | --- |
-| `Enter` | 按当前输入名称新增 landmark |
-| `Ctrl+S` | 快速保存 landmarks 为 `JSON` |
-| `Ctrl+Shift+S` | 导出 landmarks 为 `JSON` |
-| `Delete` / `Backspace` | 删除当前活动 landmark |
+| `Enter` | 使用当前输入名称新增 Landmark |
+| `Ctrl+S` | 快速保存为 `*.landmarks.json` |
+| `Ctrl+Shift+S` | 导出 Landmark JSON |
+| `M` | 切换完成状态 |
+| `Delete` / `Backspace` | 删除当前 Landmark |
 
 ### Mesh Check
 
 | 按键 | 功能 |
 | --- | --- |
 | `Ctrl+S` | 快速保存当前网格为 `VTP` |
-| `Ctrl+Shift+S` | 另存当前结果为 `VTP` / `JSON` / `STL` |
-| `R` | 执行手动分析 |
+| `Ctrl+Shift+S` | 导出当前结果为 `VTP` / `JSON` / `STL` |
+| `R` | 执行分析 |
 | `Ctrl+R` | 执行安全清理 |
 
-## 典型使用流程
-
-1. 打开单个模型，或扫描项目文件夹。
-2. 在左侧列表里选择当前任务。
-3. 在 `Labels` 中完成区域标注。
-4. 用快速保存保存阶段性结果。
-5. 在 `Landmarks` 中添加或导入特征点。
-6. 如果怀疑网格质量有问题，在 `Mesh Check` 中执行分析。
-7. 按需导出 `VTP`、标签 `JSON`、landmark `JSON` 或拆分后的 `STL`。
-8. 将任务标记为完成，然后切换到下一个模型。
-
-## 运行方式
-
-推荐环境：
+## 从源码运行
 
 ```bash
-conda activate meshlabeler
 python -m pip install -r requirements.txt
 python main.py
 ```
 
-当前验证通过的解释器版本：
-
-- Python `3.10.20`
-
-当前验证通过的直接依赖：
+当前验证过的直接依赖版本：
 
 - `numpy==2.2.6`
 - `PyQt6==6.11.0`
@@ -244,9 +241,11 @@ MeshSemantics/
 
 ## 说明
 
-- 加载 `STL` 时，会将其视为未标注网格。
+- 加载 `STL` 时，会把它视为未标注网格。
 - 加载 `VTP` 时，如果存在 `Label` 单元数据，会直接复用。
-- 软件重点是高效的标注与检查工作流，而不是 CAD 级的精细边界手工编辑。
+- 选择 `STL` 导出时，软件会按标签把多个 `STL` 文件输出到目标文件夹。
+- `Import Segment` 要求导入的标签 JSON 与当前模型的 `cell_count` 一致。
+- `Safe Cleanup` 适合低风险修复，不以 CAD 式精细边界编辑为目标。
 
 ## 许可证
 

@@ -4,30 +4,35 @@
 
 [中文说明](./README_zh.md)
 
-MeshSemantics is a desktop application for interactive triangle-mesh annotation and inspection. It combines semantic face labeling, landmark editing, project progress tracking, and mesh quality checking in one workflow, so you can move from raw meshes to clean, exportable annotation results without switching tools.
+MeshSemantics is a desktop application for interactive triangle-mesh annotation, landmark editing, project tracking, and lightweight mesh inspection. It is built for practical `STL` / `VTP` workflows where you need to load a mesh, label regions, place landmarks, check mesh quality, and export results without switching between multiple tools.
 
-The app is built with `Python + PyQt6 + vedo + VTK` and is designed for practical day-to-day work on folders of `STL` and `VTP` meshes.
+The application is implemented with `Python + PyQt6 + vedo + VTK` and currently targets Windows desktop usage.
 
-## Highlights
+## What It Does
 
-- Open a single mesh or scan a whole project folder
-- View and annotate `STL` / `VTP` triangle meshes in an interactive 3D viewport
+- Open a single mesh or scan an entire folder into a task queue
+- View and annotate `STL` / `VTP` meshes in an interactive 3D viewport
 - Label faces with:
-  - right-click single-face toggling
-  - spline-based surface-loop selection with live preview
-- Manage labels by adding, deleting, recoloring, and remapping IDs
-- Support overwrite mode when assigning onto already labeled cells
-- Undo and redo label edits and landmark edits
-- Manage named landmarks per mesh and place them directly on the surface
-- Automatically load `*.landmarks.json` next to the current mesh when available
-- Run manual `Mesh Check` analysis for common topology issues
-- Apply safe cleanup steps such as duplicate-point merge, small-hole fill, and small-component removal
-- Export labeled meshes and metadata to `VTP`, label `JSON`, landmark `JSON`, and per-label split `STL`
-- Track task states across a project folder and jump to the next unfinished model
+  - right-click single-cell toggling
+  - spline-based closed-surface selection with preview
+- Manage label IDs by adding, deleting, recoloring, and remapping them
+- Toggle overwrite mode when relabeling already-labeled cells
+- Undo and redo label edits, landmark edits, and mesh cleanup results
+- Create, rename, delete, import, export, and place named landmarks
+- Auto-load `*.landmarks.json` next to the current mesh when present
+- Import label arrays from JSON with `Import Segment`
+- Run `Mesh Check` analysis for:
+  - non-manifold edges
+  - self-intersections
+  - small connected components
+  - small holes
+- Apply low-risk cleanup steps such as duplicate-point merge, small-component removal, and hole filling
+- Export labeled meshes as `VTP`, label arrays as `JSON`, landmarks as `*.landmarks.json`, and split meshes as per-label `STL`
+- Track per-task status across a project folder and jump to the next unfinished model
 
 ## Screenshots
 
-### Labeling
+### Labels
 
 ![Label Panel](doc/label.png)
 
@@ -39,63 +44,75 @@ The app is built with `Python + PyQt6 + vedo + VTK` and is designed for practica
 
 ![Mesh Check Panel](doc/meshdoctor.png)
 
-## Main Features
+## Workflow Overview
 
-### 1. Semantic Labeling
+1. Open one mesh with `Open File`, or scan a folder with `Open Folder`.
+2. Select a task from the left-side queue.
+3. Annotate regions in the `Labels` tab.
+4. Quick-save the current mesh as `VTP`.
+5. Add or import landmarks in the `Landmarks` tab.
+6. Run `Mesh Check` when topology issues are suspected.
+7. Export `VTP`, label `JSON`, landmark `JSON`, or per-label `STL` as needed.
+8. Mark the task as completed and move to the next unfinished mesh.
 
-- Right click faces to add or remove them from the current selection
-- Press `E` to apply the active label to the previewed selection
-- Double click a labeled face to load that label into the current label selector
-- Use spline mode to draw a closed surface contour directly on the mesh
-- Insert and delete spline control points while refining the boundary
-- Toggle overwrite mode if you want to relabel already assigned regions
+## Main Panels
 
-### 2. Label Management
+### Labels
+
+- Right click a face to add or remove it from the current selection
+- Press `E` to apply the preview selection to the active label
+- Double click a labeled face to load that label into the active selector
+- Press `S` to enter spline mode
+- Use `Enter` to build the spline preview and `C` to clear it
+- Enable overwrite mode to replace existing labels instead of skipping them
+
+### Label Management
 
 - Create new label IDs
-- Delete label IDs that are no longer needed
+- Delete label IDs
 - Edit label colors
 - Remap one label ID to another
-- Keep a consistent color map across sessions
+- Keep a persistent color map across sessions
 
-### 3. Landmark Editing
+### Landmarks
 
-- Create, rename, select, and delete named landmarks
-- Click `Pick On Mesh` and place the active landmark with a surface click
-- Double click the mesh in landmark mode to create a landmark at that position
-- Avoid duplicate names by reusing, overwriting, or creating a copy name
-- Import landmark JSON and export `*.landmarks.json`
+- Add landmarks by name
+- Rename or delete existing landmarks
+- Double click the mesh in landmark mode to create a landmark at the clicked position
+- Click `Pick On Mesh` to place the currently selected landmark
+- Import or export landmark JSON
+- If a landmark name already exists, the app reuses or updates that landmark instead of silently duplicating it
 
-### 4. Mesh Check And Safe Cleanup
+### Mesh Check
 
-The `Mesh Check` tab adds a lightweight mesh-inspection workflow directly inside the app.
+`Mesh Check` is a lightweight inspection and repair workflow inside the main app.
 
-- Manual analysis can report:
+- Analyze the current mesh for:
   - non-manifold edges
   - self-intersections
   - small connected components
   - small holes
-  - triangle-cell count
-- The report panel summarizes detected issues and affected-face counts
-- Safe cleanup can optionally:
+- Highlight affected cells in the viewport
+- Review counts and a text report in the right panel
+- Run `Safe Cleanup` to:
   - merge duplicate points
   - remove small components
   - fill small holes
-  - keep only the largest component
+  - optionally keep only the largest component
   - recompute normals
 
-If cleanup changes cell count, labels are reset and landmarks/undo history are cleared so exported data stays consistent with the repaired mesh.
+If cleanup changes the mesh cell count, labels are reset and landmarks plus undo history are cleared so exported data stays consistent with the repaired mesh.
 
-### 5. Project Workflow
+### Task Queue
 
-- Scan a folder into a task list
-- Filter tasks by text and status
-- Track `Unlabeled`, `In Progress`, `Completed`, and `Failed`
-- Jump to previous, next, or next incomplete model
-- Persist project progress so work can be resumed later
-- Remove invalid entries or fall back to the original source file if a generated work file is missing
+- Scan a folder into a project dataset
+- Show `Unlabeled`, `In Progress`, `Completed`, and `Failed` task states
+- Filter by text or status
+- Open the previous or next incomplete mesh
+- Persist per-folder progress between sessions
+- Fall back from a missing generated `VTP` to the original source mesh when possible
 
-## Supported Files
+## Files
 
 ### Input
 
@@ -104,61 +121,58 @@ If cleanup changes cell count, labels are reset and landmarks/undo history are c
 
 ### Output
 
-- `*.vtp` labeled mesh export
-- `*.json` label-array export
-- `*.landmarks.json` landmark export
-- per-label `*.stl` split export
+- labeled `*.vtp`
+- label-array `*.json`
+- landmark `*.landmarks.json`
+- per-label split `*.stl`
 
 ### JSON Layouts
 
-Label JSON contains:
+Label JSON:
 
 - `cell_count`
 - `labels`
 
-Landmark JSON contains:
+Landmark JSON:
 
 - `landmark_count`
 - `landmarks`
-  - `name`
-  - `coordinates`
+- each landmark has `name` and `coordinates`
 
-Landmarks without a picked position are saved with `coordinates: null`.
+Unplaced landmarks are saved with `coordinates: null`.
 
-## Interface Overview
+## Toolbar And Interaction
 
-- Center: interactive 3D mesh viewport
-- Left panel:
-  - project file list
-  - search box
-  - status filter
-  - next-model navigation
-- Right dock:
-  - `Labels`
-  - `Landmarks`
-  - `Mesh Check`
-- Top toolbar:
-  - `Open File`
-  - `Open Folder`
-  - `Import Segment`
-  - `Save As`
-  - `Clear Selection`
-- Floating viewport actions:
-  - previous model
-  - next model
-  - quick save
-  - completed toggle
+Top toolbar:
+
+- `Open File`
+- `Open Folder`
+- `Import Segment`
+- `Save As`
+- `Clear Selection`
+
+Viewport floating controls:
+
+- previous model
+- next model
+- quick save
+- completed toggle
+
+Drag and drop:
+
+- mesh files (`.stl`, `.vtp`) can be dropped into the app to open them
+- label JSON can be dropped onto an already opened mesh to import segment labels
 
 ## Shortcuts
 
-Shortcuts depend on the active right-side panel.
+Shortcuts depend on the active right-side tab.
 
 ### Global
 
 | Key | Action |
 | --- | --- |
 | `B` | Open previous model |
-| `N` | Open next model |
+| `N` | Open next incomplete model |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
 
@@ -167,11 +181,11 @@ Shortcuts depend on the active right-side panel.
 | Key | Action |
 | --- | --- |
 | `Ctrl+S` | Quick save current mesh as `VTP` |
-| `Ctrl+Shift+S` | Save current result as `VTP` / `JSON` / `STL` |
+| `Ctrl+Shift+S` | Export current result as `VTP` / `JSON` / `STL` |
 | `S` | Enter spline mode |
 | `Enter` | Build spline preview |
-| `E` | Apply current preview to the active label |
-| `C` | Clear current preview |
+| `E` | Apply preview to the active label |
+| `C` | Clear preview |
 | `M` | Toggle completed status |
 | `Delete` / `Backspace` | Delete highlighted spline control point |
 
@@ -179,9 +193,10 @@ Shortcuts depend on the active right-side panel.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Add landmark from the current input name |
-| `Ctrl+S` | Quick save landmarks as `JSON` |
-| `Ctrl+Shift+S` | Export landmarks as `JSON` |
+| `Enter` | Add a landmark from the current name input |
+| `Ctrl+S` | Quick save landmarks to `*.landmarks.json` |
+| `Ctrl+Shift+S` | Export landmarks as JSON |
+| `M` | Toggle completed status |
 | `Delete` / `Backspace` | Delete the active landmark |
 
 ### Mesh Check
@@ -189,34 +204,16 @@ Shortcuts depend on the active right-side panel.
 | Key | Action |
 | --- | --- |
 | `Ctrl+S` | Quick save current mesh as `VTP` |
-| `Ctrl+Shift+S` | Save current result as `VTP` / `JSON` / `STL` |
-| `R` | Run manual analysis |
+| `Ctrl+Shift+S` | Export current result as `VTP` / `JSON` / `STL` |
+| `R` | Run analysis |
 | `Ctrl+R` | Run safe cleanup |
 
-## Typical Workflow
-
-1. Open one mesh or a project folder.
-2. Pick the current task from the left panel.
-3. Annotate regions in `Labels`.
-4. Save intermediate results with quick save.
-5. Add or import landmarks in `Landmarks`.
-6. Inspect the mesh in `Mesh Check` if quality problems are suspected.
-7. Export `VTP`, label `JSON`, landmark `JSON`, or split `STL` as needed.
-8. Mark the task completed and move to the next model.
-
-## Running The App
-
-Recommended environment:
+## Running From Source
 
 ```bash
-conda activate meshlabeler
 python -m pip install -r requirements.txt
 python main.py
 ```
-
-Validated interpreter:
-
-- Python `3.10.20`
 
 Validated direct dependencies:
 
@@ -244,9 +241,11 @@ MeshSemantics/
 
 ## Notes
 
-- `STL` is treated as an unlabeled mesh when loaded.
-- `VTP` reuses its `Label` cell data when present.
-- The app is optimized for efficient annotation and inspection workflow, not CAD-grade manual boundary editing.
+- `STL` loads as an unlabeled mesh.
+- `VTP` reuses its `Label` cell data when available.
+- Saving to `STL` exports one file per label into the selected folder.
+- `Import Segment` expects a label JSON whose `cell_count` matches the current mesh.
+- `Safe Cleanup` is intended for low-risk repair steps, not CAD-style manual surface editing.
 
 ## License
 

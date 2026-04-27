@@ -118,6 +118,11 @@ class MeshInteractor(QObject):
             self._emit_selection_preview()
         self.mode_changed.emit(self.state.mode)
 
+    def delete_highlighted_control_point(self) -> bool:
+        if self._interaction_context != "label" or self.state.mode not in {"SPLINE", "CONFIRM"}:
+            return False
+        return self._delete_highlighted_control_point()
+
     def begin_landmark_pick(self) -> None:
         if self._interaction_context != "landmark":
             return
@@ -211,7 +216,7 @@ class MeshInteractor(QObject):
         ):
             key = event.key()
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                if self._delete_highlighted_control_point():
+                if self.delete_highlighted_control_point():
                     return True
 
         if event.type() == QEvent.Type.MouseButtonPress:

@@ -178,7 +178,7 @@ class MeshDoctorWorker(QObject):
 
 
 class FloatingActionWindow(QWidget):
-    def __init__(self, owner: QWidget) -> None:
+    def __init__(self, owner: QWidget, orientation: Qt.Orientation = Qt.Orientation.Horizontal) -> None:
         flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -189,7 +189,7 @@ class FloatingActionWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        layout = QHBoxLayout(self)
+        layout = QHBoxLayout(self) if orientation == Qt.Orientation.Horizontal else QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
@@ -395,10 +395,12 @@ class MainWindow(QMainWindow):
             floating_layout.addWidget(control)
 
         self.floating_previous_model_button.setIcon(self._create_arrow_icon(direction="left"))
+        self.floating_previous_model_button.setIconSize(QSize(25, 25))
         self.floating_previous_model_button.setToolTip("Previous Model")
         self.floating_previous_model_button.clicked.connect(self.file_panel.open_previous_model)
 
         self.floating_next_model_button.setIcon(self._create_arrow_icon(direction="right"))
+        self.floating_next_model_button.setIconSize(QSize(25, 25))
         self.floating_next_model_button.setToolTip("Next Model")
         self.floating_next_model_button.clicked.connect(self.file_panel._open_next_model)
 
@@ -412,7 +414,33 @@ class MainWindow(QMainWindow):
         self.viewer_host.installEventFilter(self)
         self.vedo_widget.installEventFilter(self)
         self.vedo_widget.canvas.installEventFilter(self)
+        self._build_label_shortcut_buttons()
         self._position_floating_action_bar()
+
+    def _build_label_shortcut_buttons(self) -> None:
+        self._floating_label_shortcut_window = FloatingActionWindow(self, Qt.Orientation.Vertical)
+        layout = self._floating_label_shortcut_window.layout()
+        self._label_shortcut_buttons: list[QPushButton] = []
+        shortcuts = (
+            ("spline", "Start Spline", self.interactor.begin_spline),
+            ("confirm", "Confirm Preview", self.interactor.confirm_preview),
+            ("apply", "Apply Preview", self.interactor.apply_preview),
+            ("delete", "Delete Control Point", self._handle_label_delete_shortcut),
+            ("clear", "Clear Preview", self.interactor.clear_preview),
+        )
+        for icon_name, tooltip, handler in shortcuts:
+            button = QPushButton(self._floating_label_shortcut_window)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setFixedSize(52, 52)
+            button.setText("")
+            button.setToolTip(tooltip)
+            button.setIcon(self._create_label_shortcut_icon(icon_name))
+            button.setIconSize(QSize(38, 38))
+            button.clicked.connect(lambda _checked=False, action=handler: action())
+            layout.addWidget(button)
+            self._label_shortcut_buttons.append(button)
+
+        self._floating_label_shortcut_window.hide()
 
     def _position_floating_action_bar(self) -> None:
         if not hasattr(self, "_floating_action_window"):
@@ -431,16 +459,60 @@ class MainWindow(QMainWindow):
             or not host.isVisible()
         ):
             bar.hide()
+            self._hide_floating_label_shortcuts()
             return
         size = bar.sizeHint()
         if not size.isValid():
             bar.hide()
+            self._hide_floating_label_shortcuts()
             return
         anchor = host.mapToGlobal(host.rect().bottomRight())
         bar.adjustSize()
         size = bar.size()
         x = anchor.x() - size.width() - margin
         y = anchor.y() - size.height() - margin
+        bar.move(x, y)
+        bar.show()
+        bar.raise_()
+        self._position_floating_label_shortcuts()
+
+    def _hide_floating_label_shortcuts(self) -> None:
+        if hasattr(self, "_floating_label_shortcut_window"):
+            self._floating_label_shortcut_window.hide()
+
+    def _position_floating_label_shortcuts(self) -> None:
+        if not hasattr(self, "_floating_label_shortcut_window"):
+            return
+        bar = self._floating_label_shortcut_window
+        host = self.vedo_widget
+        window_handle = self.windowHandle()
+        if (
+            self.currentPanel != "label"
+            or self._busy_overlay_active
+            or (hasattr(self, "_busy_overlay") and self._busy_overlay.isVisible())
+            or not self.isVisible()
+            or window_handle is None
+            or not window_handle.isExposed()
+            or self.windowState() & Qt.WindowState.WindowMinimized
+            or not host.isVisible()
+        ):
+            bar.hide()
+            return
+
+        bar.adjustSize()
+        size = bar.size()
+        if not size.isValid():
+            bar.hide()
+            return
+
+        margin = 20
+        right = host.mapToGlobal(host.rect().topRight()).x()
+        center = host.mapToGlobal(host.rect().center())
+        top = host.mapToGlobal(host.rect().topLeft()).y()
+        bottom = host.mapToGlobal(host.rect().bottomLeft()).y()
+        x = right - size.width() - margin
+        y = center.y() - size.height() // 2
+        y = max(top + margin, min(y, bottom - size.height() - margin))
         bar.move(x, y)
         bar.show()
         bar.raise_()
@@ -606,14 +678,26 @@ class MainWindow(QMainWindow):
         save_action.triggered.connect(self.save_current)
         clear_selection_action = QAction("Clear", self)
         clear_selection_action.triggered.connect(self.clear_current_model_selection)
+        undo_action = QAction(self._create_history_icon("undo"), "Undo", self)
+        undo_action.triggered.connect(self.undo)
+        redo_action = QAction(self._create_history_icon("redo"), "Redo", self)
+        redo_action.triggered.connect(self.redo)
 
         self.import_json_action = import_json
         self.clear_selection_action = clear_selection_action
+        self.undo_action = undo_action
+        self.redo_action = redo_action
         self.import_json_action.setEnabled(False)
         self.clear_selection_action.setEnabled(False)
+        self.undo_action.setEnabled(False)
+        self.redo_action.setEnabled(False)
 
-        for action in [open_file, open_dir, import_json, save_action, clear_selection_action]:
+        for action in [open_file, open_dir, import_json, save_action, clear_selection_action, undo_action, redo_action]:
             toolbar.addAction(action)
+        self._style_toolbar_icon_button(toolbar, undo_action, "undo-button")
+        self._style_toolbar_icon_button(toolbar, redo_action, "redo-button")
+        self._sync_toolbar_icon_button_size(toolbar, clear_selection_action, undo_action)
+        self._sync_toolbar_icon_button_size(toolbar, clear_selection_action, redo_action)
 
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -830,6 +914,9 @@ class MainWindow(QMainWindow):
         index = self.active_landmark_index if self.active_landmark_index >= 0 else self.landmark_panel.selected_row()
         if index >= 0:
             self._delete_landmark(index)
+
+    def _handle_label_delete_shortcut(self) -> None:
+        self.interactor.delete_highlighted_control_point()
 
     def _handle_surface_double_click(self, position, cell_id: int) -> None:
         if self.currentPanel == "landmark":
@@ -1185,6 +1272,8 @@ class MainWindow(QMainWindow):
             return
         if hasattr(self, "_floating_action_window"):
             self._floating_action_window.close()
+        if hasattr(self, "_floating_label_shortcut_window"):
+            self._floating_label_shortcut_window.close()
         self.settings["window_size"] = [int(self.width()), int(self.height())]
         self.settings["last_open_dir"] = str(self.last_open_dir)
         self._persist_project_statuses()
@@ -1362,6 +1451,7 @@ class MainWindow(QMainWindow):
         record = self.undo_history.pop()
         self.redo_history.append(record)
         self._restore_history_state(record.state_before)
+        self._refresh_history_actions()
 
     def redo(self) -> None:
         if not self.redo_history:
@@ -1369,6 +1459,7 @@ class MainWindow(QMainWindow):
         record = self.redo_history.pop()
         self.undo_history.append(record)
         self._restore_history_state(record.state_after)
+        self._refresh_history_actions()
 
     def _apply_cells(self, cell_ids) -> None:
         before_state = self._capture_history_state()
@@ -1791,6 +1882,7 @@ class MainWindow(QMainWindow):
         if len(self.undo_history) > undo_limit:
             self.undo_history.pop(0)
         self.redo_history.clear()
+        self._refresh_history_actions()
 
     def _restore_history_state(self, state: dict) -> None:
         with self.vedo_widget.render_batch():
@@ -1861,6 +1953,13 @@ class MainWindow(QMainWindow):
     def _clear_history(self) -> None:
         self.undo_history.clear()
         self.redo_history.clear()
+        self._refresh_history_actions()
+
+    def _refresh_history_actions(self) -> None:
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(bool(self.undo_history))
+        if hasattr(self, "redo_action"):
+            self.redo_action.setEnabled(bool(self.redo_history))
 
     def _clear_loaded_mesh(self) -> None:
         self.interactor.clear_preview(emit_preview=False)
@@ -2123,6 +2222,11 @@ class MainWindow(QMainWindow):
         self.floating_quick_save_button.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setEnabled(has_current and not busy)
         self.floating_complete_checkbox.setVisible(self.currentPanel in {"label", "landmark"})
+        if hasattr(self, "_label_shortcut_buttons"):
+            label_controls_enabled = self.currentPanel == "label" and has_current and not busy
+            for button in self._label_shortcut_buttons:
+                button.setEnabled(label_controls_enabled)
+            self._floating_label_shortcut_window.setVisible(self.currentPanel == "label")
         if hasattr(self, "_floating_action_window"):
             self.floating_complete_checkbox.updateGeometry()
             self._floating_action_window.layout().invalidate()
@@ -2357,7 +2461,7 @@ class MainWindow(QMainWindow):
 
         button_height = max(reference_button.sizeHint().height(), reference_button.height(), 1)
         width = max(button_height + 12, 56)
-        icon_size = max(button_height - 4, 28)
+        icon_size = max(button_height - 4, 34)
         icon_button.setFixedSize(width, button_height)
         icon_button.setIconSize(QSize(icon_size, icon_size))
 
@@ -2370,7 +2474,7 @@ class MainWindow(QMainWindow):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         pen = QPen(QColor("#ffffff"))
-        pen.setWidth(14)
+        pen.setWidth(10)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
@@ -2379,19 +2483,123 @@ class MainWindow(QMainWindow):
         arrow = QPainterPath()
         if direction == "left":
             arrow.moveTo(QPointF(80, 48))
-            arrow.lineTo(QPointF(34, 48))
-            arrow.moveTo(QPointF(34, 48))
-            arrow.lineTo(QPointF(50, 32))
-            arrow.moveTo(QPointF(34, 48))
-            arrow.lineTo(QPointF(50, 64))
+            arrow.lineTo(QPointF(28, 48))
+            arrow.moveTo(QPointF(28, 48))
+            arrow.lineTo(QPointF(50, 26))
+            arrow.moveTo(QPointF(28, 48))
+            arrow.lineTo(QPointF(50, 70))
         else:
             arrow.moveTo(QPointF(16, 48))
-            arrow.lineTo(QPointF(62, 48))
-            arrow.moveTo(QPointF(62, 48))
-            arrow.lineTo(QPointF(46, 32))
-            arrow.moveTo(QPointF(62, 48))
-            arrow.lineTo(QPointF(46, 64))
+            arrow.lineTo(QPointF(68, 48))
+            arrow.moveTo(QPointF(68, 48))
+            arrow.lineTo(QPointF(46, 26))
+            arrow.moveTo(QPointF(68, 48))
+            arrow.lineTo(QPointF(46, 70))
         painter.drawPath(arrow)
+
+        painter.end()
+        return QIcon(pixmap)
+
+    def _create_history_icon(self, direction: str) -> QIcon:
+        pixmap = QPixmap(96, 96)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidth(12)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        path = QPainterPath()
+        if direction == "undo":
+            arrow_tip = QPointF(22, 46)
+            path.moveTo(arrow_tip)
+            path.cubicTo(QPointF(46, 28), QPointF(84, 44), QPointF(74, 82))
+            painter.drawPath(path)
+            arrow = QPainterPath()
+            arrow.moveTo(arrow_tip)
+            arrow.lineTo(QPointF(42, 26))
+            arrow.moveTo(arrow_tip)
+            arrow.lineTo(QPointF(44, 62))
+            painter.drawPath(arrow)
+        else:
+            arrow_tip = QPointF(74, 46)
+            path.moveTo(arrow_tip)
+            path.cubicTo(QPointF(50, 28), QPointF(12, 44), QPointF(22, 82))
+            painter.drawPath(path)
+            arrow = QPainterPath()
+            arrow.moveTo(arrow_tip)
+            arrow.lineTo(QPointF(54, 26))
+            arrow.moveTo(arrow_tip)
+            arrow.lineTo(QPointF(52, 62))
+            painter.drawPath(arrow)
+
+        painter.end()
+        return QIcon(pixmap)
+
+    def _create_label_shortcut_icon(self, icon_name: str) -> QIcon:
+        pixmap = QPixmap(96, 96)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidth(8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if icon_name == "spline":
+            path = QPainterPath()
+            path.moveTo(QPointF(18, 68))
+            path.cubicTo(QPointF(34, 20), QPointF(60, 24), QPointF(78, 54))
+            painter.drawPath(path)
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawEllipse(QPointF(18, 68), 6, 6)
+            painter.drawEllipse(QPointF(48, 34), 6, 6)
+            painter.drawEllipse(QPointF(78, 54), 6, 6)
+        elif icon_name == "confirm":
+            upper = QPainterPath()
+            upper.moveTo(QPointF(18, 50))
+            upper.cubicTo(QPointF(32, 28), QPointF(64, 28), QPointF(78, 50))
+            lower = QPainterPath()
+            lower.moveTo(QPointF(18, 50))
+            lower.cubicTo(QPointF(32, 72), QPointF(64, 72), QPointF(78, 50))
+            painter.drawPath(upper)
+            painter.drawPath(lower)
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawEllipse(QPointF(48, 50), 8, 8)
+        elif icon_name == "apply":
+            path = QPainterPath()
+            path.moveTo(QPointF(22, 50))
+            path.lineTo(QPointF(40, 68))
+            path.lineTo(QPointF(76, 28))
+            painter.drawPath(path)
+        elif icon_name == "clear":
+            painter.drawLine(QPointF(28, 28), QPointF(68, 68))
+            painter.drawLine(QPointF(68, 28), QPointF(28, 68))
+        elif icon_name == "delete":
+            painter.drawLine(QPointF(28, 30), QPointF(68, 30))
+            painter.drawLine(QPointF(40, 20), QPointF(56, 20))
+            painter.drawLine(QPointF(36, 20), QPointF(60, 20))
+            trash = QPainterPath()
+            trash.moveTo(QPointF(34, 38))
+            trash.lineTo(QPointF(38, 76))
+            trash.lineTo(QPointF(58, 76))
+            trash.lineTo(QPointF(62, 38))
+            painter.drawPath(trash)
+            detail_pen = QPen(QColor("#ffffff"))
+            detail_pen.setWidth(5)
+            detail_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(detail_pen)
+            painter.drawLine(QPointF(44, 46), QPointF(45, 66))
+            painter.drawLine(QPointF(52, 46), QPointF(51, 66))
 
         painter.end()
         return QIcon(pixmap)

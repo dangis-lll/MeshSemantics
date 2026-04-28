@@ -109,14 +109,14 @@ class FileTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole and column in {1, 2}:
             return int(Qt.AlignmentFlag.AlignCenter)
 
-        if role == Qt.ItemDataRole.FontRole and is_current:
+        if role == Qt.ItemDataRole.FontRole:
             font = self.parent().font() if self.parent() is not None else None
-            if font is not None:
+            if font is not None and (is_current or (column == 1 and status == STATUS_COMPLETED)):
                 font.setBold(True)
                 return font
 
-        if role == Qt.ItemDataRole.ForegroundRole and status == STATUS_FAILED:
-            return QColor("#8c2f2f")
+        if role == Qt.ItemDataRole.ForegroundRole and column == 1:
+            return _status_color(status)
 
         return None
 
@@ -561,3 +561,13 @@ def _status_text(status: str) -> str:
         STATUS_FAILED: "Failed",
     }
     return labels.get(status, status)
+
+
+def _status_color(status: str) -> QColor:
+    colors = {
+        STATUS_UNLABELED: QColor("#6b7280"),
+        STATUS_IN_PROGRESS: QColor("#2563eb"),
+        STATUS_COMPLETED: QColor("#15803d"),
+        STATUS_FAILED: QColor("#b91c1c"),
+    }
+    return colors.get(status, QColor("#374151"))

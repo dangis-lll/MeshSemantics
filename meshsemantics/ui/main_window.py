@@ -2425,6 +2425,9 @@ class MainWindow(QMainWindow):
         removed_current = self.current_path is not None and (
             normalize_path(self.current_path) == work_path or normalize_path(self.current_path) == source_path
         )
+        next_path_to_open = None
+        if removed_current:
+            next_path_to_open = self.file_panel.model.next_incomplete_path_after(self.current_path)
         if work_path:
             self._project_status_by_work_path.pop(work_path, None)
             relative_key = self._relative_status_key(work_path)
@@ -2457,6 +2460,8 @@ class MainWindow(QMainWindow):
         self.file_panel.set_current_path(current_path)
         if removed_current:
             self._clear_loaded_mesh()
+            if next_path_to_open is not None:
+                self.load_mesh(next_path_to_open)
         self._refresh_completion_action()
 
     def _restore_last_project(self) -> None:

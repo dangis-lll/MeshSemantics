@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -39,21 +39,39 @@ class ProjectDataset:
     current_path: str | None
     next_open_path: str | None
     suggested_path: str | None
+    path_index_by_key: dict[str, int] = field(default_factory=dict, repr=False, compare=False)
+    current_index: int | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        normalized_current = normalize_path(self.current_path)
+        path_index = self.path_index_by_key
+        if not path_index:
+            path_index = _build_path_index(self.entries)
+            object.__setattr__(self, "path_index_by_key", path_index)
+        if self.current_index is None and normalized_current is not None:
+            object.__setattr__(self, "current_index", path_index.get(_path_key(normalized_current) or ""))
 
     def contains_path(self, path: str | Path | None) -> bool:
-        normalized = normalize_path(path)
-        if normalized is None:
+        key = _path_key(path)
+        if key is None:
             return False
-        return any(_matches_entry_path(entry, normalized) for entry in self.entries)
+        return key in self.path_index_by_key
 
 
 def normalize_path(value: str | Path | None) -> str | None:
     if value in (None, ""):
         return None
     try:
-        return str(Path(value).expanduser().resolve())
+        return os.path.normpath(os.path.abspath(os.path.expanduser(os.fspath(value))))
     except Exception:
         return str(Path(value))
+
+
+def _path_key(value: str | Path | None) -> str | None:
+    normalized = normalize_path(value)
+    if normalized is None:
+        return None
+    return os.path.normcase(normalized)
 
 
 def _relative_status_key(path: str | Path, root: str | Path) -> str | None:
@@ -74,6 +92,7 @@ def scan_project_dataset(
     root = Path(folder).expanduser()
     if not root.exists():
         return ProjectDataset(str(root), tuple(), None, None, None)
+    normalized_root = normalize_path(root) or str(root)
 
     saved_status = {
         normalized_key: value
@@ -100,15 +119,16 @@ def scan_project_dataset(
         for _, candidate_mtime in variants.values():
             modified_at = max(modified_at, datetime.fromtimestamp(candidate_mtime))
 
-        work_path = normalize_path(work)
+        source_path = normalize_path(source) or str(source)
+        work_path = normalize_path(work) or str(work)
         status = saved_status.get(_relative_status_key(work, root) or "") or (
             STATUS_IN_PROGRESS if vtp_item else STATUS_UNLABELED
         )
         entries.append(
             ProjectEntry(
                 display_path=normalize_relative_status_key(relative_key) or relative_key,
-                source_path=str(source.resolve()),
-                work_path=work_path or str(work),
+                source_path=source_path,
+                work_path=work_path,
                 status=status if status in STATUS_ORDER else STATUS_UNLABELED,
                 modified_at=modified_at,
                 is_current=False,
@@ -129,16 +149,13 @@ def scan_project_dataset(
 
         next_open_path = _next_open_entry(entries, current_path)
 
-    marked_entries = tuple(
-        replace(entry, is_current=_matches_entry_path(entry, current_path))
-        for entry in entries
-    )
-    return ProjectDataset(
-        root_path=str(root.resolve()),
-        entries=marked_entries,
-        current_path=current_path,
+    return _build_dataset(
+        normalized_root,
+        entries,
+        current_path,
         next_open_path=next_open_path,
         suggested_path=current_path,
+        preserve_order=True,
     )
 
 
@@ -177,13 +194,13 @@ def mark_current_entry(dataset: ProjectDataset, path: str | Path | None) -> Proj
 def find_entry(dataset: ProjectDataset | None, path: str | Path | None) -> ProjectEntry | None:
     if dataset is None:
         return None
-    normalized = normalize_path(path)
-    if normalized is None:
+    key = _path_key(path)
+    if key is None:
         return None
-    for entry in dataset.entries:
-        if _matches_entry_path(entry, normalized):
-            return entry
-    return None
+    index = dataset.path_index_by_key.get(key)
+    if index is None:
+        return None
+    return dataset.entries[index]
 
 
 def build_status_index(dataset: ProjectDataset | None) -> dict[str, str]:
@@ -220,10 +237,9 @@ def compute_next_open_path(
     if total_entries <= 1:
         return None
 
-    current_index = next(
-        (index for index, entry in enumerate(dataset.entries) if _matches_entry_path(entry, target)),
-        None,
-    )
+    current_index = dataset.current_index
+    if target is not None and _path_key(dataset.current_path) != _path_key(target):
+        current_index = dataset.path_index_by_key.get(_path_key(target) or "")
     start_index = current_index if current_index is not None else -1
     for offset in range(1, total_entries):
         candidate_index = (start_index + offset) % total_entries
@@ -269,8 +285,14 @@ def _rebuild_dataset(
     else:
         current = _pick_default_entry(sorted_entries)
     next_open_path = _next_open_entry(sorted_entries, current)
-    marked_entries = tuple(replace(entry, is_current=_matches_entry_path(entry, current)) for entry in sorted_entries)
-    return ProjectDataset(root_path, marked_entries, current, next_open_path, current)
+    return _build_dataset(
+        root_path,
+        sorted_entries,
+        current,
+        next_open_path=next_open_path,
+        suggested_path=current,
+        preserve_order=True,
+    )
 
 
 def _pick_default_entry(entries: list[ProjectEntry]) -> str | None:
@@ -313,7 +335,48 @@ def _status_for_entry(entry: ProjectEntry, status_by_work_path: dict[str, str] |
 def _matches_entry_path(entry: ProjectEntry, path: str | None) -> bool:
     if path is None:
         return False
-    return normalize_path(entry.work_path) == path or normalize_path(entry.source_path) == path
+    return _path_key(entry.work_path) == _path_key(path) or _path_key(entry.source_path) == _path_key(path)
+
+
+def _build_path_index(entries: tuple[ProjectEntry, ...]) -> dict[str, int]:
+    index: dict[str, int] = {}
+    for row, entry in enumerate(entries):
+        for candidate in (entry.work_path, entry.source_path):
+            key = _path_key(candidate)
+            if key is not None and key not in index:
+                index[key] = row
+    return index
+
+
+def _build_dataset(
+    root_path: str,
+    entries: list[ProjectEntry] | tuple[ProjectEntry, ...],
+    current_path: str | None,
+    *,
+    next_open_path: str | None,
+    suggested_path: str | None,
+    preserve_order: bool = False,
+) -> ProjectDataset:
+    ordered_entries = list(entries) if preserve_order else sorted(entries, key=lambda entry: entry.display_path.lower())
+    normalized_current = normalize_path(current_path)
+    current = None
+    if normalized_current and any(_matches_entry_path(entry, normalized_current) for entry in ordered_entries):
+        current = normalized_current
+    else:
+        current = _pick_default_entry(ordered_entries)
+
+    marked_entries = tuple(replace(entry, is_current=_matches_entry_path(entry, current)) for entry in ordered_entries)
+    path_index = _build_path_index(marked_entries)
+    current_index = path_index.get(_path_key(current) or "") if current is not None else None
+    return ProjectDataset(
+        root_path=root_path,
+        entries=marked_entries,
+        current_path=current,
+        next_open_path=next_open_path,
+        suggested_path=suggested_path,
+        path_index_by_key=path_index,
+        current_index=current_index,
+    )
 
 
 def _scan_supported_mesh_files(

@@ -69,6 +69,18 @@ class FileTableModel(QAbstractTableModel):
         self._loaded_rows += amount
         self.endInsertRows()
 
+    def ensure_row_loaded(self, row: int) -> None:
+        if row < 0:
+            return
+        target_loaded_rows = min(len(self._visible_entry_rows), row + 1)
+        if target_loaded_rows <= self._loaded_rows:
+            return
+        start = self._loaded_rows
+        end = target_loaded_rows - 1
+        self.beginInsertRows(QModelIndex(), start, end)
+        self._loaded_rows = target_loaded_rows
+        self.endInsertRows()
+
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
@@ -390,11 +402,26 @@ class FilePanel(QDockWidget):
             self._preferred_width = event.size().width()
         super().resizeEvent(event)
 
-    def set_project(self, project: ProjectDataset | None) -> None:
+    def set_project(
+        self,
+        project: ProjectDataset | None,
+        *,
+        restore_selection: bool = True,
+        preserve_view: bool = False,
+    ) -> None:
         current_width = self.width()
+        previous_row = self.table.currentIndex().row() if preserve_view and self.table.currentIndex().isValid() else -1
+        previous_scroll = self.table.verticalScrollBar().value() if preserve_view else None
         self._project = project
         self.model.set_project(project)
-        self._restore_selection(project.current_path if project is not None else None)
+        if restore_selection:
+            self._restore_selection(project.current_path if project is not None else None)
+        elif preserve_view and previous_row >= 0:
+            self.model.ensure_row_loaded(previous_row)
+            if previous_row < self.model.rowCount():
+                self.table.selectRow(previous_row)
+            if previous_scroll is not None:
+                self.table.verticalScrollBar().setValue(previous_scroll)
         self._sync_buttons()
         if current_width > 0:
             self._preferred_width = current_width
@@ -417,12 +444,13 @@ class FilePanel(QDockWidget):
     def stop(self) -> None:
         self._search_timer.stop()
 
-    def set_current_path(self, path: str | None) -> None:
+    def set_current_path(self, path: str | None, *, restore_selection: bool = True) -> None:
         if self._project is not None and path == self._project.current_path:
             self.model.set_current_path(path)
             return
         self.model.set_current_path(path)
-        self._restore_selection(path)
+        if restore_selection:
+            self._restore_selection(path)
         self._sync_buttons()
         if self._project is not None:
             self._project = ProjectDataset(
@@ -481,10 +509,7 @@ class FilePanel(QDockWidget):
         if row < 0:
             self.table.clearSelection()
             return
-        while self.model.canFetchMore():
-            if row < self.model.loaded_rows():
-                break
-            self.model.fetchMore()
+        self.model.ensure_row_loaded(row)
         self.table.selectRow(row)
         self.table.scrollTo(self.model.index(row, 0))
 

@@ -55,6 +55,7 @@ from meshsemantics.core.project_dataset import (
     build_relative_status_index,
     build_work_path_status_index,
     compute_next_open_path,
+    find_entry,
     normalize_path,
     scan_project_dataset,
     update_entry_status,
@@ -1024,6 +1025,11 @@ class MainWindow(QMainWindow):
             "Meshes (*.stl *.vtp)",
         )
         if file_path:
+            normalized_path = normalize_path(file_path)
+            self._set_last_open_dir(Path(file_path).parent)
+            if normalized_path and self.project_dataset is not None and self.project_dataset.contains_path(normalized_path):
+                self.load_mesh(normalized_path)
+                return
             self.open_project(Path(file_path).parent, preferred_path=file_path, auto_load=True)
 
     def open_folder_dialog(self) -> None:
@@ -1822,7 +1828,12 @@ class MainWindow(QMainWindow):
         self.current_path = normalized_target
         self.vedo_widget.mesh.filename = normalized_target
         self.is_dirty = False
-        self._replace_current_project_entry(previous_path, normalized_target, status)
+        self._replace_current_project_entry(
+            previous_path,
+            normalized_target,
+            status,
+            sync_file_panel=False,
+        )
         if previous_path and previous_path != normalized_target:
             self._project_status_by_work_path.pop(previous_path, None)
             previous_relative_key = self._relative_status_key(previous_path)
@@ -2152,7 +2163,13 @@ class MainWindow(QMainWindow):
             return None
         return self._project_status_by_relative_path.get(relative_path)
 
-    def _set_current_status(self, status: str, persist_only: bool = False) -> None:
+    def _set_current_status(
+        self,
+        status: str,
+        persist_only: bool = False,
+        *,
+        sync_file_panel: bool = True,
+    ) -> None:
         if self.current_path is None:
             return
         current_status = self._current_entry_status()
@@ -2186,8 +2203,15 @@ class MainWindow(QMainWindow):
                 next_open_path=next_open_path,
                 suggested_path=self.project_dataset.suggested_path,
             )
-            self.file_panel.update_status(self.current_path, status)
-            self.file_panel.set_current_path(self.current_path)
+            if sync_file_panel:
+                self.file_panel.update_status(self.current_path, status)
+                self.file_panel.set_current_path(self.current_path)
+            else:
+                self.file_panel.set_project(
+                    self.project_dataset,
+                    restore_selection=False,
+                    preserve_view=True,
+                )
         self._refresh_completion_action()
         if persist_only:
             return
@@ -2234,7 +2258,14 @@ class MainWindow(QMainWindow):
             self._floating_action_window.adjustSize()
         self._position_floating_action_bar()
 
-    def _replace_current_project_entry(self, previous_path: str | None, next_path: str, status: str) -> None:
+    def _replace_current_project_entry(
+        self,
+        previous_path: str | None,
+        next_path: str,
+        status: str,
+        *,
+        sync_file_panel: bool = True,
+    ) -> None:
         if self.project_dataset is None or previous_path is None:
             return
 
@@ -2277,8 +2308,15 @@ class MainWindow(QMainWindow):
             next_open_path=next_open_path,
             suggested_path=next_path,
         )
-        self.file_panel.set_project(self.project_dataset)
-        self.file_panel.set_current_path(next_path)
+        if sync_file_panel:
+            self.file_panel.set_project(self.project_dataset)
+            self.file_panel.set_current_path(next_path)
+        else:
+            self.file_panel.set_project(
+                self.project_dataset,
+                restore_selection=False,
+                preserve_view=True,
+            )
 
     def _display_path_for_project_entry(self, path: str | Path) -> str:
         normalized = normalize_path(path)
@@ -2319,15 +2357,7 @@ class MainWindow(QMainWindow):
         return self._handle_deleted_project_entry(entry)
 
     def _project_entry_for_path(self, path: str) -> object | None:
-        if self.project_dataset is None:
-            return None
-        normalized = normalize_path(path)
-        if normalized is None:
-            return None
-        for entry in self.project_dataset.entries:
-            if normalize_path(entry.work_path) == normalized or normalize_path(entry.source_path) == normalized:
-                return entry
-        return None
+        return find_entry(self.project_dataset, path)
 
     def _switch_project_entry_to_source(self, entry) -> None:
         if self.project_dataset is None:

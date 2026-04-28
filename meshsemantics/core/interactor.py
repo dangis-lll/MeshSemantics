@@ -334,10 +334,17 @@ class MeshInteractor(QObject):
         return self._handle_spline_left_press(x, y)
 
     def _update_hover_from_display(self, display: tuple[float, float]) -> None:
+        previous_point_index = self.state.hover_point_index
+        previous_segment_index = self.state.hover_segment_index
         point_index, point_dist = self._find_nearest_control_point(display)
         segment_index, segment_dist = self._find_nearest_curve_segment(display)
         self.state.hover_point_index = point_index if point_dist <= self.POINT_HIT_RADIUS_PX else -1
         self.state.hover_segment_index = segment_index if segment_dist <= self.SEGMENT_HIT_RADIUS_PX else -1
+        if (
+            self.state.hover_point_index == previous_point_index
+            and self.state.hover_segment_index == previous_segment_index
+        ):
+            return
         self._emit_control_overlay()
 
     def _update_curve_preview(self) -> None:

@@ -79,34 +79,40 @@ class MeshInteractor(QObject):
             "Spline mode: left click to add points, drag to rotate the model, click the first point to close, Enter to preview."
         )
 
-    def confirm_preview(self) -> None:
+    def confirm_preview(self, emit_visuals: bool = True) -> bool:
         if self._interaction_context != "label" or self.state.mode != "SPLINE":
-            return
+            return False
         if len(self.state.control_points_3d) < 3:
             self.message.emit("At least 3 control points are required.")
-            return
+            return False
         loop_points = self._build_contour_line_points(closed=True)
         if len(loop_points) < 3:
             self.message.emit("The contour line is invalid. Adjust the control points and try again.")
-            return
+            return False
         selected = select_cells_by_surface_loop(self.vedo_widget.mesh.dataset, loop_points)
         self.state.spline_preview_cell_ids = selected
         self.state.curve_points_3d = [tuple(point) for point in loop_points]
         self.state.closed = True
         self.state.mode = "CONFIRM"
-        self._emit_control_overlay()
-        self._emit_selection_preview()
-        self.mode_changed.emit(self.state.mode)
+        if emit_visuals:
+            self._emit_control_overlay()
+            self._emit_selection_preview()
+            self.mode_changed.emit(self.state.mode)
         if selected.size == 0:
             self.message.emit("Surface-loop clipping found no cells. Adjust the contour and try again.")
         else:
-            self.message.emit(
-                f"Previewing {self.current_selection().size} cells. Press E to apply or C to cancel."
-            )
+            if emit_visuals:
+                self.message.emit(
+                    f"Previewing {self.current_selection().size} cells. Press E to apply or C to cancel."
+                )
+        return True
 
     def apply_preview(self) -> None:
         if self._interaction_context != "label":
             return
+        if self.state.mode == "SPLINE":
+            if not self.confirm_preview(emit_visuals=False):
+                return
         selection = self.current_selection()
         if selection.size:
             self.apply_requested.emit(selection)

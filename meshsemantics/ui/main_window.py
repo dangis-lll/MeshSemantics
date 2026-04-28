@@ -2226,7 +2226,8 @@ class MainWindow(QMainWindow):
             label_controls_enabled = self.currentPanel == "label" and has_current and not busy
             for button in self._label_shortcut_buttons:
                 button.setEnabled(label_controls_enabled)
-            self._floating_label_shortcut_window.setVisible(self.currentPanel == "label")
+            if self.currentPanel != "label":
+                self._floating_label_shortcut_window.hide()
         if hasattr(self, "_floating_action_window"):
             self.floating_complete_checkbox.updateGeometry()
             self._floating_action_window.layout().invalidate()

@@ -322,6 +322,7 @@ class FilePanel(QDockWidget):
         )
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self._floating_size = QSize(540, 720)
+        self._floating_resize_pending = False
         self._preferred_width = 540
         self._cache_limit = cache_limit
         self._project: ProjectDataset | None = None
@@ -546,11 +547,23 @@ class FilePanel(QDockWidget):
 
     def _on_top_level_changed(self, floating: bool) -> None:
         if floating:
+            self._floating_resize_pending = True
             QTimer.singleShot(0, self._apply_floating_size)
+        else:
+            self._floating_resize_pending = False
 
     def _apply_floating_size(self) -> None:
-        if self.isFloating():
-            self.resize(self._floating_size)
+        if not self._floating_resize_pending:
+            return
+        if not self.isFloating():
+            self._floating_resize_pending = False
+            return
+        top_level = self.window()
+        if top_level is None or not top_level.isVisible() or not top_level.isWindow():
+            QTimer.singleShot(0, self._apply_floating_size)
+            return
+        top_level.resize(self._floating_size)
+        self._floating_resize_pending = False
 
 
 def _status_text(status: str) -> str:

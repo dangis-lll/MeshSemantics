@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from vtkmodules.vtkCommonComputationalGeometry import vtkKochanekSpline, vtkParametricSpline
-from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints, reference
+from vtkmodules.vtkCommonCore import vtkPoints, reference
 from vtkmodules.vtkCommonDataModel import vtkGenericCell, vtkPointLocator
 from vtkmodules.vtkFiltersCore import vtkCleanPolyData, vtkClipPolyData, vtkPolyDataConnectivityFilter, vtkPolyDataNormals
 from vtkmodules.vtkFiltersModeling import vtkDijkstraGraphGeodesicPath
@@ -15,6 +17,17 @@ from vtkmodules.util.numpy_support import vtk_to_numpy
 
 
 DRS_CONTOUR_POINTS_SPACING = 0.3
+_INT32_MIN = np.iinfo(np.int32).min
+_DRS_TOPOLOGY_CACHE: dict[tuple[int, int, int, int], "_DrsTopology"] = {}
+
+
+@dataclass(frozen=True)
+class _DrsTopology:
+    point_cells: np.ndarray
+    cell_points: np.ndarray
+    cell_neighbor_cells: np.ndarray
+    cell_neighbor_point_1: np.ndarray
+    cell_neighbor_point_2: np.ndarray
 
 
 def _polyline_length(points: np.ndarray, closed: bool = False) -> float:
@@ -525,70 +538,256 @@ def _drs_geodesic_boundary_point_ids(polydata, loop_ids: np.ndarray) -> np.ndarr
     return np.asarray(boundary, dtype=np.int64)
 
 
+def _padded_rows(row_ids: np.ndarray, values: np.ndarray, fill_value: int = -1) -> np.ndarray:
+    row_ids = np.asarray(row_ids, dtype=np.int64).reshape(-1)
+    if row_ids.size == 0:
+        return np.full((0, 0), fill_value, dtype=np.int64)
+    counts = np.bincount(row_ids)
+    width = int(counts.max(initial=0))
+    if width <= 0:
+        return np.full((int(counts.size), 0), fill_value, dtype=np.int64)
+    rows = np.full((int(counts.size), width), fill_value, dtype=np.int64)
+    order = np.argsort(row_ids, kind="stable")
+    sorted_rows = row_ids[order]
+    sorted_values = np.asarray(values, dtype=np.int64).reshape(-1)[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(sorted_rows)) + 1]
+    for start, end in zip(starts, np.r_[starts[1:], sorted_rows.size]):
+        row = int(sorted_rows[start])
+        rows[row, : end - start] = sorted_values[start:end]
+    return rows
+
+
+def _polydata_cell_points(polydata) -> np.ndarray:
+    polys = polydata.GetPolys()
+    if polys is None or polys.GetNumberOfCells() == 0:
+        return np.full((0, 0), -1, dtype=np.int64)
+
+    if hasattr(polys, "GetOffsetsArray") and hasattr(polys, "GetConnectivityArray"):
+        offsets_array = polys.GetOffsetsArray()
+        connectivity_array = polys.GetConnectivityArray()
+        if offsets_array is not None and connectivity_array is not None:
+            offsets = vtk_to_numpy(offsets_array).astype(np.int64, copy=False)
+            connectivity = vtk_to_numpy(connectivity_array).astype(np.int64, copy=False)
+            if offsets.size >= 2:
+                sizes = np.diff(offsets)
+                width = int(sizes.max(initial=0))
+                if width > 0 and np.all(sizes == width):
+                    return connectivity.reshape(-1, width)
+                cell_points = np.full((sizes.size, width), -1, dtype=np.int64)
+                for cell_id, (start, end) in enumerate(zip(offsets[:-1], offsets[1:])):
+                    cell_points[cell_id, : int(end - start)] = connectivity[int(start) : int(end)]
+                return cell_points
+
+    data_array = polys.GetData()
+    if data_array is None:
+        return np.full((0, 0), -1, dtype=np.int64)
+    data = vtk_to_numpy(data_array).astype(np.int64, copy=False)
+    rows: list[np.ndarray] = []
+    offset = 0
+    width = 0
+    while offset < data.size:
+        size = int(data[offset])
+        offset += 1
+        if size <= 0 or offset + size > data.size:
+            break
+        row = data[offset : offset + size]
+        rows.append(row)
+        width = max(width, size)
+        offset += size
+    cell_points = np.full((len(rows), width), -1, dtype=np.int64)
+    for cell_id, row in enumerate(rows):
+        cell_points[cell_id, : row.size] = row
+    return cell_points
+
+
+def _drs_topology(polydata) -> _DrsTopology | None:
+    cell_count = int(polydata.GetNumberOfCells())
+    point_count = int(polydata.GetNumberOfPoints())
+    if cell_count == 0 or point_count == 0:
+        return None
+
+    cache_key = (id(polydata), int(polydata.GetMTime()), cell_count, point_count)
+    cached = _DRS_TOPOLOGY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    cell_points = _polydata_cell_points(polydata)
+    if cell_points.shape[0] != cell_count:
+        return None
+
+    valid = cell_points >= 0
+    point_ids = cell_points[valid]
+    owner_cells = np.repeat(np.arange(cell_count, dtype=np.int64), valid.sum(axis=1))
+    point_cells = _padded_rows(point_ids, owner_cells)
+    if point_cells.shape[0] < point_count:
+        padded = np.full((point_count, point_cells.shape[1]), -1, dtype=np.int64)
+        padded[: point_cells.shape[0], : point_cells.shape[1]] = point_cells
+        point_cells = padded
+
+    cell_sizes = valid.sum(axis=1).astype(np.int64, copy=False)
+    if cell_points.shape[1] > 0 and np.all(cell_sizes == cell_points.shape[1]):
+        edge_starts = cell_points
+        edge_ends = np.roll(cell_points, -1, axis=1)
+        edge_owner_array = np.repeat(np.arange(cell_count, dtype=np.int64), cell_points.shape[1])
+        edge_a_array = np.minimum(edge_starts, edge_ends).reshape(-1)
+        edge_b_array = np.maximum(edge_starts, edge_ends).reshape(-1)
+    else:
+        edge_owner: list[int] = []
+        edge_a: list[int] = []
+        edge_b: list[int] = []
+        for cell_id, size in enumerate(cell_sizes.tolist()):
+            if size < 2:
+                continue
+            points = cell_points[cell_id, :size]
+            starts = points
+            ends = np.roll(points, -1)
+            edge_owner.extend([cell_id] * int(size))
+            edge_a.extend(np.minimum(starts, ends).astype(np.int64).tolist())
+            edge_b.extend(np.maximum(starts, ends).astype(np.int64).tolist())
+        edge_owner_array = np.asarray(edge_owner, dtype=np.int64)
+        edge_a_array = np.asarray(edge_a, dtype=np.int64)
+        edge_b_array = np.asarray(edge_b, dtype=np.int64)
+
+    neighbor_owner_parts: list[np.ndarray] = []
+    neighbor_cell_parts: list[np.ndarray] = []
+    neighbor_point_1_parts: list[np.ndarray] = []
+    neighbor_point_2_parts: list[np.ndarray] = []
+    if edge_owner_array.size:
+        order = np.lexsort((edge_owner_array, edge_b_array, edge_a_array))
+        sorted_owner = edge_owner_array[order]
+        sorted_a = edge_a_array[order]
+        sorted_b = edge_b_array[order]
+        breaks = np.flatnonzero((np.diff(sorted_a) != 0) | (np.diff(sorted_b) != 0)) + 1
+        starts = np.r_[0, breaks]
+        ends = np.r_[breaks, sorted_owner.size]
+
+        group_sizes = ends - starts
+        paired = group_sizes == 2
+        if np.any(paired):
+            first = starts[paired]
+            second = first + 1
+            first_owner = sorted_owner[first]
+            second_owner = sorted_owner[second]
+            first_point = sorted_a[first]
+            second_point = sorted_b[first]
+            neighbor_owner_parts.append(np.concatenate([first_owner, second_owner]))
+            neighbor_cell_parts.append(np.concatenate([second_owner, first_owner]))
+            neighbor_point_1_parts.append(np.concatenate([first_point, first_point]))
+            neighbor_point_2_parts.append(np.concatenate([second_point, second_point]))
+
+        for start, end in zip(starts[~paired], ends[~paired]):
+            owners = np.unique(sorted_owner[start:end])
+            if owners.size < 2:
+                continue
+            a = int(sorted_a[start])
+            b = int(sorted_b[start])
+            owner_values: list[int] = []
+            neighbor_values: list[int] = []
+            for owner in owners.tolist():
+                for neighbor in owners.tolist():
+                    if neighbor == owner:
+                        continue
+                    owner_values.append(int(owner))
+                    neighbor_values.append(int(neighbor))
+            neighbor_owner_parts.append(np.asarray(owner_values, dtype=np.int64))
+            neighbor_cell_parts.append(np.asarray(neighbor_values, dtype=np.int64))
+            neighbor_point_1_parts.append(np.full(len(owner_values), a, dtype=np.int64))
+            neighbor_point_2_parts.append(np.full(len(owner_values), b, dtype=np.int64))
+
+    neighbor_owner = np.concatenate(neighbor_owner_parts) if neighbor_owner_parts else np.zeros(0, dtype=np.int64)
+    neighbor_cell = np.concatenate(neighbor_cell_parts) if neighbor_cell_parts else np.zeros(0, dtype=np.int64)
+    neighbor_point_1 = np.concatenate(neighbor_point_1_parts) if neighbor_point_1_parts else np.zeros(0, dtype=np.int64)
+    neighbor_point_2 = np.concatenate(neighbor_point_2_parts) if neighbor_point_2_parts else np.zeros(0, dtype=np.int64)
+
+    cell_neighbor_cells = _padded_rows(neighbor_owner, neighbor_cell)
+    cell_neighbor_point_1 = _padded_rows(neighbor_owner, neighbor_point_1)
+    cell_neighbor_point_2 = _padded_rows(neighbor_owner, neighbor_point_2)
+    if cell_neighbor_cells.shape[0] < cell_count:
+        width = cell_neighbor_cells.shape[1]
+        padded_cells = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_p1 = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_p2 = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_cells[: cell_neighbor_cells.shape[0], :width] = cell_neighbor_cells
+        padded_p1[: cell_neighbor_point_1.shape[0], :width] = cell_neighbor_point_1
+        padded_p2[: cell_neighbor_point_2.shape[0], :width] = cell_neighbor_point_2
+        cell_neighbor_cells = padded_cells
+        cell_neighbor_point_1 = padded_p1
+        cell_neighbor_point_2 = padded_p2
+
+    topology = _DrsTopology(
+        point_cells=point_cells,
+        cell_points=cell_points,
+        cell_neighbor_cells=cell_neighbor_cells,
+        cell_neighbor_point_1=cell_neighbor_point_1,
+        cell_neighbor_point_2=cell_neighbor_point_2,
+    )
+    if len(_DRS_TOPOLOGY_CACHE) > 4:
+        _DRS_TOPOLOGY_CACHE.clear()
+    _DRS_TOPOLOGY_CACHE[cache_key] = topology
+    return topology
+
+
 def _drs_cells_inside_boundary(polydata, boundary_ids: np.ndarray) -> np.ndarray:
     cell_count = int(polydata.GetNumberOfCells())
     point_count = int(polydata.GetNumberOfPoints())
     if cell_count == 0 or point_count == 0:
         return np.zeros(0, dtype=np.int32)
 
-    boundary_points = set(int(point_id) for point_id in boundary_ids.tolist())
-    cell_marks = np.full(cell_count, np.iinfo(np.int32).min, dtype=np.int32)
-    point_marks = np.full(point_count, np.iinfo(np.int32).min, dtype=np.int32)
+    topology = _drs_topology(polydata)
+    if topology is None:
+        return np.zeros(0, dtype=np.int32)
 
-    current_front = list(boundary_points)
-    for point_id in current_front:
-        if 0 <= point_id < point_count:
-            point_marks[point_id] = 0
+    boundary = np.unique(boundary_ids[(boundary_ids >= 0) & (boundary_ids < point_count)].astype(np.int64))
+    if boundary.size < 3:
+        return np.zeros(0, dtype=np.int32)
+
+    boundary_mask = np.zeros(point_count, dtype=bool)
+    boundary_mask[boundary] = True
+    cell_marks = np.full(cell_count, _INT32_MIN, dtype=np.int32)
+    point_marks = np.full(point_count, _INT32_MIN, dtype=np.int32)
+    point_marks[boundary] = 0
 
     max_front_cell = -1
     current_front_number = 1
-    while current_front:
-        next_front: list[int] = []
-        for point_id in current_front:
-            cell_ids = vtkIdList()
-            polydata.GetPointCells(int(point_id), cell_ids)
-            for cell_index in range(cell_ids.GetNumberOfIds()):
-                cell_id = int(cell_ids.GetId(cell_index))
-                if cell_marks[cell_id] != np.iinfo(np.int32).min:
-                    continue
-                if current_front_number > 0:
-                    max_front_cell = cell_id
-                cell_marks[cell_id] = current_front_number
-                ids = polydata.GetCell(cell_id).GetPointIds()
-                for local_index in range(ids.GetNumberOfIds()):
-                    neighbor_point_id = int(ids.GetId(local_index))
-                    if point_marks[neighbor_point_id] == np.iinfo(np.int32).min:
-                        point_marks[neighbor_point_id] = 1
-                        next_front.append(neighbor_point_id)
+    current_front = boundary
+    while current_front.size:
+        incident_cells = topology.point_cells[current_front].reshape(-1)
+        incident_cells = np.unique(incident_cells[incident_cells >= 0])
+        unmarked_cells = incident_cells[cell_marks[incident_cells] == _INT32_MIN]
+        if unmarked_cells.size:
+            max_front_cell = int(unmarked_cells[-1])
+            cell_marks[unmarked_cells] = current_front_number
+            neighbor_points = topology.cell_points[unmarked_cells].reshape(-1)
+            neighbor_points = np.unique(neighbor_points[neighbor_points >= 0])
+            next_front = neighbor_points[point_marks[neighbor_points] == _INT32_MIN]
+            point_marks[next_front] = 1
+        else:
+            next_front = np.zeros(0, dtype=np.int64)
         current_front = next_front
         current_front_number += 1
 
     if max_front_cell < 0:
         return np.zeros(0, dtype=np.int32)
 
-    current_cells = [max_front_cell]
+    current_cells = np.asarray([max_front_cell], dtype=np.int64)
     cell_marks[max_front_cell] = -1
-    while current_cells:
-        next_cells: list[int] = []
-        for cell_id in current_cells:
-            ids = polydata.GetCell(int(cell_id)).GetPointIds()
-            cell_point_ids = [int(ids.GetId(i)) for i in range(ids.GetNumberOfIds())]
-            for index, point_1 in enumerate(cell_point_ids):
-                point_2 = cell_point_ids[(index + 1) % len(cell_point_ids)]
-                mark_1 = point_marks[point_1]
-                mark_2 = point_marks[point_2]
-                if mark_1 != 0:
-                    point_marks[point_1] = -1
-                if mark_1 == 0 and mark_2 == 0:
-                    continue
-                neighbors = vtkIdList()
-                polydata.GetCellEdgeNeighbors(int(cell_id), int(point_1), int(point_2), neighbors)
-                for neighbor_index in range(neighbors.GetNumberOfIds()):
-                    neighbor_cell_id = int(neighbors.GetId(neighbor_index))
-                    if cell_marks[neighbor_cell_id] != -1:
-                        cell_marks[neighbor_cell_id] = -1
-                        next_cells.append(neighbor_cell_id)
-        current_cells = next_cells
+    while current_cells.size:
+        neighbors = topology.cell_neighbor_cells[current_cells].reshape(-1)
+        point_1 = topology.cell_neighbor_point_1[current_cells].reshape(-1)
+        point_2 = topology.cell_neighbor_point_2[current_cells].reshape(-1)
+        valid = neighbors >= 0
+        if not np.any(valid):
+            break
+        neighbors = neighbors[valid]
+        point_1 = point_1[valid]
+        point_2 = point_2[valid]
+        crosses_boundary = boundary_mask[point_1] & boundary_mask[point_2]
+        candidates = neighbors[~crosses_boundary]
+        candidates = np.unique(candidates[cell_marks[candidates] != -1])
+        if candidates.size == 0:
+            break
+        cell_marks[candidates] = -1
+        current_cells = candidates
 
     # DRS uses SelectionModeToLargestRegion with vtkClipPolyData(value=0).
     # The largest side is marked negative, so clipping keeps the opposite side.

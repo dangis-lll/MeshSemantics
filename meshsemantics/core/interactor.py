@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
-from vtkmodules.vtkRenderingCore import vtkCellPicker
+from vtkmodules.vtkCommonCore import vtkIdList, vtkPoints
+from vtkmodules.vtkFiltersGeneral import vtkOBBTree
 
 from meshsemantics.core.spline_selector import (
     build_surface_contour_line,
@@ -49,8 +50,8 @@ class MeshInteractor(QObject):
         self.settings = settings
         self.state = InteractionState()
         self._interaction_context = "label"
-        self.picker = vtkCellPicker()
-        self.picker.SetTolerance(0.002)
+        self._surface_picker_tree = vtkOBBTree()
+        self._surface_picker_mtime = -1
         self._suppress_right_drag = False
         self._bind_events()
 
@@ -231,6 +232,10 @@ class MeshInteractor(QObject):
                 self._toggle_pick(*self._to_vtk_display(event.position().x(), event.position().y()))
                 return True
             if event.button() == Qt.MouseButton.LeftButton and self.state.mode == "SPLINE":
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self._update_hover_from_display(self._to_vtk_display(event.position().x(), event.position().y()))
+                    self.delete_highlighted_control_point()
+                    return True
                 self.state.left_press_pos = (float(event.position().x()), float(event.position().y()))
                 self.state.left_dragging = False
                 self.state.vtk_drag_started = False
@@ -426,6 +431,10 @@ class MeshInteractor(QObject):
         return float(np.linalg.norm(point - closest))
 
     def _pick_surface_point(self, x: float, y: float) -> tuple[float, float, float] | None:
+        picked = self._pick_visible_surface(x, y)
+        return None if picked is None else picked[0]
+
+    def _pick_visible_surface(self, x: float, y: float) -> tuple[tuple[float, float, float], int] | None:
         candidate_offsets = [
             (0.0, 0.0),
             (-self.PICK_RETRY_RADIUS_PX, 0.0),
@@ -438,14 +447,88 @@ class MeshInteractor(QObject):
             (self.PICK_RETRY_RADIUS_PX, self.PICK_RETRY_RADIUS_PX),
         ]
         for dx, dy in candidate_offsets:
-            self.picker.Pick(x + dx, y + dy, 0, self.vedo_widget.renderer)
-            if self.picker.GetCellId() >= 0:
-                return tuple(float(v) for v in self.picker.GetPickPosition())
+            picked = self._pick_visible_surface_on_ray(x + dx, y + dy)
+            if picked is not None:
+                return picked
         return None
 
+    def _pick_visible_surface_on_ray(self, x: float, y: float) -> tuple[tuple[float, float, float], int] | None:
+        if self.vedo_widget.mesh is None:
+            return None
+        ray = self._display_ray(float(x), float(y))
+        if ray is None:
+            return None
+        near_point, far_point = ray
+
+        tree = self._surface_pick_tree()
+        if tree is None:
+            return None
+
+        intersections = vtkPoints()
+        cell_ids = vtkIdList()
+        hit = tree.IntersectWithLine(
+            [float(v) for v in near_point],
+            [float(v) for v in far_point],
+            intersections,
+            cell_ids,
+        )
+        if not hit or intersections.GetNumberOfPoints() == 0:
+            return None
+
+        ray_vector = far_point - near_point
+        ray_length2 = float(np.dot(ray_vector, ray_vector))
+        if ray_length2 <= 1e-12:
+            return None
+
+        candidates: list[tuple[float, tuple[float, float, float], int]] = []
+        for index in range(intersections.GetNumberOfPoints()):
+            point = np.asarray(intersections.GetPoint(index), dtype=np.float64)
+            depth = float(np.dot(point - near_point, ray_vector) / ray_length2)
+            if depth < -1e-6 or depth > 1.0 + 1e-6:
+                continue
+            cell_id = int(cell_ids.GetId(index)) if index < cell_ids.GetNumberOfIds() else -1
+            candidates.append((depth, tuple(float(v) for v in point), cell_id))
+
+        if not candidates:
+            return None
+        _depth, point, cell_id = min(candidates, key=lambda item: item[0])
+        return point, cell_id
+
+    def _surface_pick_tree(self):
+        polydata = self.vedo_widget.mesh.dataset if self.vedo_widget.mesh is not None else None
+        if polydata is None:
+            return None
+        mtime = int(polydata.GetMTime())
+        if self._surface_picker_mtime != mtime:
+            self._surface_picker_tree.SetDataSet(polydata)
+            self._surface_picker_tree.BuildLocator()
+            self._surface_picker_mtime = mtime
+        return self._surface_picker_tree
+
+    def _display_ray(self, x: float, y: float) -> tuple[np.ndarray, np.ndarray] | None:
+        renderer = self.vedo_widget.renderer
+        near_point = self._display_to_world(renderer, x, y, 0.0)
+        far_point = self._display_to_world(renderer, x, y, 1.0)
+        if near_point is None or far_point is None:
+            return None
+        return near_point, far_point
+
+    def _display_to_world(self, renderer, x: float, y: float, z: float) -> np.ndarray | None:
+        renderer.SetDisplayPoint(float(x), float(y), float(z))
+        renderer.DisplayToWorld()
+        world = renderer.GetWorldPoint()
+        if world is None or abs(float(world[3])) <= 1e-12:
+            return None
+        point = np.asarray(world[:3], dtype=np.float64) / float(world[3])
+        if not np.isfinite(point).all():
+            return None
+        return point
+
     def _toggle_pick(self, x: float, y: float) -> None:
-        self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
-        cell_id = self.picker.GetCellId()
+        picked = self._pick_visible_surface(x, y)
+        if picked is None:
+            return
+        _point, cell_id = picked
         if cell_id < 0:
             return
         cell_id = int(cell_id)
@@ -465,11 +548,11 @@ class MeshInteractor(QObject):
         self.message.emit(f"{action} cell {cell_id}. Total selected: {self.current_selection().size}")
 
     def _emit_double_clicked_surface(self, x: float, y: float) -> None:
-        self.picker.Pick(x, y, 0, self.vedo_widget.renderer)
-        cell_id = int(self.picker.GetCellId())
-        if cell_id >= 0:
-            point = tuple(float(v) for v in self.picker.GetPickPosition())
-            self.surface_double_clicked.emit(point, cell_id)
+        picked = self._pick_visible_surface(x, y)
+        if picked is not None:
+            point, cell_id = picked
+            if cell_id >= 0:
+                self.surface_double_clicked.emit(point, cell_id)
 
     def _emit_selection_preview(self) -> None:
         self.preview_changed.emit(self.current_selection())

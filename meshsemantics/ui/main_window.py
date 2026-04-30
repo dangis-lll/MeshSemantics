@@ -423,7 +423,7 @@ class MainWindow(QMainWindow):
         layout = self._floating_label_shortcut_window.layout()
         self._label_shortcut_buttons: list[QPushButton] = []
         shortcuts = (
-            ("spline", "Start Spline", self.interactor.begin_spline),
+            ("spline", "Draw Curve", self.interactor.begin_spline),
             ("confirm", "Confirm Preview", self.interactor.confirm_preview),
             ("apply", "Apply Preview", self.interactor.apply_preview),
             ("delete", "Delete Control Point", self._handle_label_delete_shortcut),

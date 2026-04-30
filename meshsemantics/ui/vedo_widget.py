@@ -14,6 +14,8 @@ from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
 from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
+from meshsemantics.core.spline_selector import warm_surface_selection_cache
+
 try:
     from vtkmodules.qt.QVTKOpenGLNativeWidget import QVTKOpenGLNativeWidget
     from vtkmodules.vtkRenderingOpenGL2 import vtkGenericOpenGLRenderWindow
@@ -209,6 +211,7 @@ class VedoWidget(QWidget):
         self._ensure_interactor_ready()
         self.plotter.show(self.mesh, resetcam=True)
         self._schedule_render()
+        QTimer.singleShot(80, self._warm_surface_selection_cache)
         self.mesh_loaded.emit(int(self.base_labels.size))
 
     def clear_mesh(self) -> None:
@@ -254,6 +257,8 @@ class VedoWidget(QWidget):
         ids = np.asarray(cell_ids, dtype=np.int32).reshape(-1)
         ids = ids[(ids >= 0) & (ids < self.display_labels.size)]
         previous_ids = self.preview_cell_ids
+        if np.array_equal(ids, previous_ids):
+            return
         if previous_ids.size:
             self.display_labels[previous_ids] = self.base_labels[previous_ids]
         if ids.size:
@@ -428,7 +433,6 @@ class VedoWidget(QWidget):
         self.mesh.dataset.Modified()
         mapper = self.mesh.mapper
         mapper.Modified()
-        mapper.Update()
         self.mesh.modified()
 
     def _scaled_marker_radius(self, ratio: float, minimum: float = 0.0) -> float:
@@ -464,6 +468,11 @@ class VedoWidget(QWidget):
             self.cell_normals = np.zeros_like(self.cell_centers)
         else:
             self.cell_normals = vtk_to_numpy(normals).astype(np.float64)
+
+    def _warm_surface_selection_cache(self) -> None:
+        if self.mesh is None:
+            return
+        warm_surface_selection_cache(self.mesh.dataset)
 
     def _remove_control_actors(self) -> None:
         for actor in [self.control_points_actor, self.control_line_actor, self.selected_control_actor]:

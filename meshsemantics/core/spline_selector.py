@@ -19,6 +19,8 @@ from vtkmodules.util.numpy_support import vtk_to_numpy
 DRS_CONTOUR_POINTS_SPACING = 0.3
 _INT32_MIN = np.iinfo(np.int32).min
 _DRS_TOPOLOGY_CACHE: dict[tuple[int, int, int, int], "_DrsTopology"] = {}
+_CELL_LOCATOR_CACHE: dict[tuple[int, int, int, int], vtkCellLocator] = {}
+_POINT_LOCATOR_CACHE: dict[tuple[int, int, int, int], vtkPointLocator] = {}
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,54 @@ class _DrsTopology:
     cell_neighbor_cells: np.ndarray
     cell_neighbor_point_1: np.ndarray
     cell_neighbor_point_2: np.ndarray
+
+
+def _polydata_cache_key(polydata) -> tuple[int, int, int, int]:
+    mesh_mtime = int(polydata.GetMeshMTime()) if hasattr(polydata, "GetMeshMTime") else int(polydata.GetMTime())
+    return (
+        id(polydata),
+        mesh_mtime,
+        int(polydata.GetNumberOfCells()),
+        int(polydata.GetNumberOfPoints()),
+    )
+
+
+def _trim_cache(cache: dict, max_items: int = 4) -> None:
+    if len(cache) > max_items:
+        cache.clear()
+
+
+def _cached_cell_locator(polydata) -> vtkCellLocator:
+    cache_key = _polydata_cache_key(polydata)
+    locator = _CELL_LOCATOR_CACHE.get(cache_key)
+    if locator is None:
+        locator = vtkCellLocator()
+        locator.SetDataSet(polydata)
+        locator.BuildLocator()
+        _trim_cache(_CELL_LOCATOR_CACHE)
+        _CELL_LOCATOR_CACHE[cache_key] = locator
+    return locator
+
+
+def _cached_point_locator(polydata) -> vtkPointLocator:
+    cache_key = _polydata_cache_key(polydata)
+    locator = _POINT_LOCATOR_CACHE.get(cache_key)
+    if locator is None:
+        locator = vtkPointLocator()
+        locator.SetDataSet(polydata)
+        locator.BuildLocator()
+        _trim_cache(_POINT_LOCATOR_CACHE)
+        _POINT_LOCATOR_CACHE[cache_key] = locator
+    return locator
+
+
+def warm_surface_selection_cache(polydata) -> None:
+    """Build reusable surface-selection indexes before the user asks for a preview."""
+    if polydata is None or polydata.GetNumberOfCells() == 0:
+        return
+    _cached_cell_locator(polydata)
+    _cached_point_locator(polydata)
+    _drs_topology(polydata)
 
 
 def _polyline_length(points: np.ndarray, closed: bool = False) -> float:
@@ -116,9 +166,7 @@ def snap_points_to_surface(polydata, points_world) -> np.ndarray:
     if points.shape[0] == 0:
         return points
 
-    locator = vtkCellLocator()
-    locator.SetDataSet(polydata)
-    locator.BuildLocator()
+    locator = _cached_cell_locator(polydata)
 
     generic_cell = vtkGenericCell()
     cell_id = reference(0)
@@ -202,9 +250,7 @@ def project_spline_to_surface_by_normals(
         return snap_points_to_surface(polydata, spline)
 
     normal_polydata = _polydata_with_cell_normals(polydata)
-    locator = vtkCellLocator()
-    locator.SetDataSet(normal_polydata)
-    locator.BuildLocator()
+    locator = _cached_cell_locator(normal_polydata)
 
     normals = normal_polydata.GetCellData().GetNormals()
     if normals is None or normals.GetNumberOfTuples() == 0:
@@ -496,9 +542,7 @@ def select_cells_by_drs_surface_loop(polydata, loop_points_world) -> np.ndarray:
 
 
 def _closest_mesh_point_ids(polydata, points: np.ndarray) -> np.ndarray:
-    locator = vtkPointLocator()
-    locator.SetDataSet(polydata)
-    locator.BuildLocator()
+    locator = _cached_point_locator(polydata)
 
     ids: list[int] = []
     for point in points:
@@ -606,7 +650,7 @@ def _drs_topology(polydata) -> _DrsTopology | None:
     if cell_count == 0 or point_count == 0:
         return None
 
-    cache_key = (id(polydata), int(polydata.GetMTime()), cell_count, point_count)
+    cache_key = _polydata_cache_key(polydata)
     cached = _DRS_TOPOLOGY_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -721,8 +765,7 @@ def _drs_topology(polydata) -> _DrsTopology | None:
         cell_neighbor_point_1=cell_neighbor_point_1,
         cell_neighbor_point_2=cell_neighbor_point_2,
     )
-    if len(_DRS_TOPOLOGY_CACHE) > 4:
-        _DRS_TOPOLOGY_CACHE.clear()
+    _trim_cache(_DRS_TOPOLOGY_CACHE)
     _DRS_TOPOLOGY_CACHE[cache_key] = topology
     return topology
 

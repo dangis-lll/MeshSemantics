@@ -10,6 +10,7 @@ on:
       - ".github/workflows/build-windows.yml"
       - "main.py"
       - "main.spec"
+      - "main-windows-onefile.spec"
       - "requirements.txt"
       - "meshsemantics/**"
 
@@ -38,18 +39,18 @@ jobs:
       - name: Build executable
         shell: pwsh
         run: |
-          pyinstaller --clean -y main.spec
-          if (-not (Test-Path "dist\MeshSemantics\MeshSemantics.exe")) {
-            throw "dist\MeshSemantics\MeshSemantics.exe was not created."
+          pyinstaller --clean -y main-windows-onefile.spec
+          if (-not (Test-Path "dist\MeshSemantics.exe")) {
+            throw "dist\MeshSemantics.exe was not created."
           }
 
-      - name: Zip executable folder
+      - name: Zip executable
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist\MeshSemantics" -DestinationPath "dist\MeshSemantics-windows.zip" -Force
+          Compress-Archive -Path "dist\MeshSemantics.exe" -DestinationPath "dist\MeshSemantics-windows-onefile.zip" -Force
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: MeshSemantics-windows-app
-          path: dist/MeshSemantics-windows.zip
+          name: MeshSemantics-windows-onefile
+          path: dist/MeshSemantics-windows-onefile.zip

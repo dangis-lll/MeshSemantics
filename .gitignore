@@ -4,6 +4,7 @@ __pycache__/
 *.cpython-*.pyc
 
 dist/
+build/
 *.exe
 **/.meshsemantics_status.csv
 

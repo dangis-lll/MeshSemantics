@@ -1,24 +1,32 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 hiddenimports = sorted(
     set(
         collect_submodules("vedo.plotter")
         + collect_submodules("vedo.visual")
+        + collect_submodules("vtkmodules")
         + [
             "vedo.plotter.runtime",
             "vedo.visual.runtime",
+            "vtkmodules.qt.QVTKRenderWindowInteractor",
+            "vtkmodules.vtkRenderingOpenGL2",
         ]
     )
 )
 
 project_root = Path.cwd()
+icon_ico = project_root / "meshsemantics" / "assets" / "app.ico"
+icon_icns = project_root / "build" / "app.icns"
+icon_path = str(icon_icns if sys.platform == "darwin" and icon_icns.exists() else icon_ico)
 
 datas = collect_data_files("vedo")
+datas += collect_data_files("vtkmodules")
 datas += [
     (str(path), "meshsemantics/ui")
     for path in sorted((project_root / "meshsemantics" / "ui").glob("*.ui"))
@@ -28,12 +36,13 @@ datas += [
     for path in sorted((project_root / "meshsemantics" / "assets").glob("*"))
     if path.is_file()
 ]
+binaries = collect_dynamic_libs("vtkmodules")
 
 
 a = Analysis(
     ["main.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -48,8 +57,6 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
     name="MeshSemantics",
     debug=False,
@@ -64,5 +71,30 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=[r"C:\project\MeshSemantics\meshsemantics\assets\app.ico"],
+    icon=icon_path,
+    exclude_binaries=True,
 )
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="MeshSemantics",
+)
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="MeshSemantics.app",
+        icon=icon_path if Path(icon_path).suffix == ".icns" else None,
+        bundle_identifier="com.meshsemantics.app",
+        info_plist={
+            "CFBundleDisplayName": "MeshSemantics",
+            "CFBundleName": "MeshSemantics",
+            "NSHighResolutionCapable": True,
+        },
+    )

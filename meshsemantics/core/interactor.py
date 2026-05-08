@@ -111,7 +111,7 @@ class MeshInteractor(QObject):
     def apply_preview(self) -> None:
         if self._interaction_context != "label":
             return
-        if self.state.mode == "SPLINE":
+        if self.state.mode == "SPLINE" and self.state.control_points_3d:
             if not self.confirm_preview(emit_visuals=False):
                 return
         selection = self.current_selection()

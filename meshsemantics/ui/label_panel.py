@@ -220,7 +220,7 @@ class LabelPanel(QWidget):
 
     def add_next_label(self) -> None:
         before_state = self.snapshot_state()
-        next_label = self._max_existing_label() + 1
+        next_label = self._next_available_label_after_current()
         if self.ensure_label(next_label):
             self.label_spin.setValue(next_label)
             self.history_requested.emit(before_state)
@@ -429,6 +429,17 @@ class LabelPanel(QWidget):
             if key != "_default"
         ]
         return max(labels, default=0)
+
+    def _next_available_label_after_current(self) -> int:
+        existing_labels = {
+            int(key)
+            for key in self._colormap.keys()
+            if key != "_default"
+        }
+        candidate = max(0, self.current_label()) + 1
+        while candidate in existing_labels:
+            candidate += 1
+        return candidate
 
     def _generate_distinct_color(self, label: int) -> tuple[int, int, int]:
         preset = preset_label_rgb(label)

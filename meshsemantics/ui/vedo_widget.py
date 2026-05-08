@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import numpy as np
 import vedo
-from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QEvent, QThread, QTimer, pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
@@ -25,6 +25,19 @@ except ImportError:
     QVTKOpenGLNativeWidget = None
     vtkGenericOpenGLRenderWindow = None
     _HAS_QVTK_OPENGL_NATIVE_WIDGET = False
+
+
+class SurfaceSelectionCacheWorker(QObject):
+    finished = pyqtSignal(int)
+
+    def __init__(self, generation: int, polydata, parent=None) -> None:
+        super().__init__(parent)
+        self.generation = int(generation)
+        self.polydata = polydata
+
+    def run(self) -> None:
+        warm_surface_selection_cache(self.polydata)
+        self.finished.emit(self.generation)
 
 
 class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):

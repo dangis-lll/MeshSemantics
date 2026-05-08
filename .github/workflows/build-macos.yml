@@ -9,7 +9,7 @@ on:
     paths:
       - ".github/workflows/build-macos.yml"
       - "main.py"
-      - "main.spec"
+      - "main-macos-onefile.spec"
       - "requirements.txt"
       - "meshsemantics/**"
 
@@ -54,16 +54,17 @@ jobs:
       - name: Build app bundle
         shell: bash -el {0}
         run: |
-          pyinstaller --clean -y main.spec
+          pyinstaller --clean -y main-macos-onefile.spec
           test -d dist/MeshSemantics.app
+          test -f dist/MeshSemantics.app/Contents/MacOS/MeshSemantics
 
       - name: Zip app bundle
         shell: bash -el {0}
         run: |
-          ditto -c -k --sequesterRsrc --keepParent dist/MeshSemantics.app dist/MeshSemantics-macos.zip
+          ditto -c -k --sequesterRsrc --keepParent dist/MeshSemantics.app dist/MeshSemantics-macos-onefile.zip
 
       - name: Upload macOS app
         uses: actions/upload-artifact@v4
         with:
-          name: MeshSemantics-macos-app
-          path: dist/MeshSemantics-macos.zip
+          name: MeshSemantics-macos-onefile-app
+          path: dist/MeshSemantics-macos-onefile.zip

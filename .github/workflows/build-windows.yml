@@ -8,8 +8,8 @@ on:
       - master
     paths:
       - ".github/workflows/build-windows.yml"
+      - "build_main.bat"
       - "main.py"
-      - "main.spec"
       - "main-windows-onefile.spec"
       - "requirements.txt"
       - "meshsemantics/**"

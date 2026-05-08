@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set "ENV_NAME=meshlabeler"
-set "SPEC_FILE=main.spec"
+set "SPEC_FILE=main-windows-onefile.spec"
 set "CONDA_BAT="
 
 if not exist "%SPEC_FILE%" (
@@ -57,5 +57,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo [OK] Build completed. Check the dist directory.
+echo [OK] Build completed. Check dist\MeshSemantics.exe.
 pause

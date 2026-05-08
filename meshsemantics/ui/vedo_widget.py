@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ProcessPoolExecutor
 from contextlib import contextmanager
 
 import numpy as np
 import vedo
-from PyQt6.QtCore import QObject, QEvent, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
@@ -14,7 +15,11 @@ from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
 from vtkmodules.vtkFiltersGeometry import vtkGeometryFilter
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
-from meshsemantics.core.spline_selector import warm_surface_selection_cache
+from meshsemantics.core.spline_selector import (
+    build_surface_selection_topology,
+    install_drs_topology_cache,
+    surface_selection_topology_input,
+)
 
 try:
     from vtkmodules.qt.QVTKOpenGLNativeWidget import QVTKOpenGLNativeWidget
@@ -25,19 +30,6 @@ except ImportError:
     QVTKOpenGLNativeWidget = None
     vtkGenericOpenGLRenderWindow = None
     _HAS_QVTK_OPENGL_NATIVE_WIDGET = False
-
-
-class SurfaceSelectionCacheWorker(QObject):
-    finished = pyqtSignal(int)
-
-    def __init__(self, generation: int, polydata, parent=None) -> None:
-        super().__init__(parent)
-        self.generation = int(generation)
-        self.polydata = polydata
-
-    def run(self) -> None:
-        warm_surface_selection_cache(self.polydata)
-        self.finished.emit(self.generation)
 
 
 class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):
@@ -139,6 +131,7 @@ else:
 
 class VedoWidget(QWidget):
     mesh_loaded = pyqtSignal(int)
+    _surface_cache_finished = pyqtSignal(int, object)
     _LANDMARK_RADIUS_RATIO = 0.0076
     _LANDMARK_MIN_RADIUS = 1e-3
 
@@ -185,6 +178,10 @@ class VedoWidget(QWidget):
         self.landmark_points_actor = None
         self.selected_landmark_actor = None
         self.issue_highlight_actor = None
+        self._surface_cache_generation = 0
+        self._surface_cache_executor: ProcessPoolExecutor | None = None
+        self._surface_cache_future: Future | None = None
+        self._surface_cache_finished.connect(self._install_surface_selection_cache)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -224,7 +221,7 @@ class VedoWidget(QWidget):
         self._ensure_interactor_ready()
         self.plotter.show(self.mesh, resetcam=True)
         self._schedule_render()
-        QTimer.singleShot(80, self._warm_surface_selection_cache)
+        self._start_surface_selection_cache_process()
         self.mesh_loaded.emit(int(self.base_labels.size))
 
     def clear_mesh(self) -> None:
@@ -242,6 +239,10 @@ class VedoWidget(QWidget):
         self.landmark_points_actor = None
         self.selected_landmark_actor = None
         self.issue_highlight_actor = None
+        self._surface_cache_generation += 1
+        if self._surface_cache_future is not None:
+            self._surface_cache_future.cancel()
+            self._surface_cache_future = None
         self.render()
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
@@ -482,10 +483,47 @@ class VedoWidget(QWidget):
         else:
             self.cell_normals = vtk_to_numpy(normals).astype(np.float64)
 
-    def _warm_surface_selection_cache(self) -> None:
+    def _start_surface_selection_cache_process(self) -> None:
+        self._surface_cache_generation += 1
+        generation = self._surface_cache_generation
         if self.mesh is None:
             return
-        warm_surface_selection_cache(self.mesh.dataset)
+        payload = surface_selection_topology_input(self.mesh.dataset)
+        if payload is None:
+            return
+        if self._surface_cache_future is not None and not self._surface_cache_future.done():
+            self._surface_cache_future.cancel()
+            if self._surface_cache_executor is not None:
+                self._surface_cache_executor.shutdown(wait=False, cancel_futures=True)
+                self._surface_cache_executor = None
+        if self._surface_cache_executor is None:
+            self._surface_cache_executor = ProcessPoolExecutor(max_workers=1)
+        future = self._surface_cache_executor.submit(build_surface_selection_topology, payload)
+        self._surface_cache_future = future
+        future.add_done_callback(lambda completed: self._emit_surface_cache_result(generation, completed))
+
+    def _emit_surface_cache_result(self, generation: int, future: Future) -> None:
+        if future.cancelled():
+            return
+        try:
+            topology = future.result()
+        except Exception:
+            topology = None
+        self._surface_cache_finished.emit(int(generation), topology)
+
+    def _install_surface_selection_cache(self, generation: int, topology) -> None:
+        if generation != self._surface_cache_generation or self.mesh is None:
+            return
+        install_drs_topology_cache(self.mesh.dataset, topology)
+
+    def closeEvent(self, event) -> None:
+        if self._surface_cache_future is not None:
+            self._surface_cache_future.cancel()
+            self._surface_cache_future = None
+        if self._surface_cache_executor is not None:
+            self._surface_cache_executor.shutdown(wait=False, cancel_futures=True)
+            self._surface_cache_executor = None
+        super().closeEvent(event)
 
     def _remove_control_actors(self) -> None:
         for actor in [self.control_points_actor, self.control_line_actor, self.selected_control_actor]:

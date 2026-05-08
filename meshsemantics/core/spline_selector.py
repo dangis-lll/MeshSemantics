@@ -80,6 +80,158 @@ def warm_surface_selection_cache(polydata) -> None:
     _drs_topology(polydata)
 
 
+def surface_selection_topology_input(polydata) -> tuple[np.ndarray, int, int] | None:
+    """Return a small, pickle-friendly topology payload for process workers."""
+    if polydata is None:
+        return None
+    cell_count = int(polydata.GetNumberOfCells())
+    point_count = int(polydata.GetNumberOfPoints())
+    if cell_count == 0 or point_count == 0:
+        return None
+    cell_points = _polydata_cell_points(polydata)
+    if cell_points.shape[0] != cell_count:
+        return None
+    return cell_points.astype(np.int64, copy=True), cell_count, point_count
+
+
+def build_drs_topology_from_cell_points(
+    cell_points: np.ndarray,
+    cell_count: int,
+    point_count: int,
+) -> _DrsTopology | None:
+    cell_points = np.asarray(cell_points, dtype=np.int64)
+    cell_count = int(cell_count)
+    point_count = int(point_count)
+    if cell_count == 0 or point_count == 0 or cell_points.shape[0] != cell_count:
+        return None
+
+    valid = cell_points >= 0
+    point_ids = cell_points[valid]
+    owner_cells = np.repeat(np.arange(cell_count, dtype=np.int64), valid.sum(axis=1))
+    point_cells = _padded_rows(point_ids, owner_cells)
+    if point_cells.shape[0] < point_count:
+        padded = np.full((point_count, point_cells.shape[1]), -1, dtype=np.int64)
+        padded[: point_cells.shape[0], : point_cells.shape[1]] = point_cells
+        point_cells = padded
+
+    cell_sizes = valid.sum(axis=1).astype(np.int64, copy=False)
+    if cell_points.shape[1] > 0 and np.all(cell_sizes == cell_points.shape[1]):
+        edge_starts = cell_points
+        edge_ends = np.roll(cell_points, -1, axis=1)
+        edge_owner_array = np.repeat(np.arange(cell_count, dtype=np.int64), cell_points.shape[1])
+        edge_a_array = np.minimum(edge_starts, edge_ends).reshape(-1)
+        edge_b_array = np.maximum(edge_starts, edge_ends).reshape(-1)
+    else:
+        edge_owner: list[int] = []
+        edge_a: list[int] = []
+        edge_b: list[int] = []
+        for cell_id, size in enumerate(cell_sizes.tolist()):
+            if size < 2:
+                continue
+            points = cell_points[cell_id, :size]
+            starts = points
+            ends = np.roll(points, -1)
+            edge_owner.extend([cell_id] * int(size))
+            edge_a.extend(np.minimum(starts, ends).astype(np.int64).tolist())
+            edge_b.extend(np.maximum(starts, ends).astype(np.int64).tolist())
+        edge_owner_array = np.asarray(edge_owner, dtype=np.int64)
+        edge_a_array = np.asarray(edge_a, dtype=np.int64)
+        edge_b_array = np.asarray(edge_b, dtype=np.int64)
+
+    neighbor_owner_parts: list[np.ndarray] = []
+    neighbor_cell_parts: list[np.ndarray] = []
+    neighbor_point_1_parts: list[np.ndarray] = []
+    neighbor_point_2_parts: list[np.ndarray] = []
+    if edge_owner_array.size:
+        order = np.lexsort((edge_owner_array, edge_b_array, edge_a_array))
+        sorted_owner = edge_owner_array[order]
+        sorted_a = edge_a_array[order]
+        sorted_b = edge_b_array[order]
+        breaks = np.flatnonzero((np.diff(sorted_a) != 0) | (np.diff(sorted_b) != 0)) + 1
+        starts = np.r_[0, breaks]
+        ends = np.r_[breaks, sorted_owner.size]
+
+        group_sizes = ends - starts
+        paired = group_sizes == 2
+        if np.any(paired):
+            first = starts[paired]
+            second = first + 1
+            first_owner = sorted_owner[first]
+            second_owner = sorted_owner[second]
+            first_point = sorted_a[first]
+            second_point = sorted_b[first]
+            neighbor_owner_parts.append(np.concatenate([first_owner, second_owner]))
+            neighbor_cell_parts.append(np.concatenate([second_owner, first_owner]))
+            neighbor_point_1_parts.append(np.concatenate([first_point, first_point]))
+            neighbor_point_2_parts.append(np.concatenate([second_point, second_point]))
+
+        for start, end in zip(starts[~paired], ends[~paired]):
+            owners = np.unique(sorted_owner[start:end])
+            if owners.size < 2:
+                continue
+            a = int(sorted_a[start])
+            b = int(sorted_b[start])
+            owner_values: list[int] = []
+            neighbor_values: list[int] = []
+            for owner in owners.tolist():
+                for neighbor in owners.tolist():
+                    if neighbor == owner:
+                        continue
+                    owner_values.append(int(owner))
+                    neighbor_values.append(int(neighbor))
+            neighbor_owner_parts.append(np.asarray(owner_values, dtype=np.int64))
+            neighbor_cell_parts.append(np.asarray(neighbor_values, dtype=np.int64))
+            neighbor_point_1_parts.append(np.full(len(owner_values), a, dtype=np.int64))
+            neighbor_point_2_parts.append(np.full(len(owner_values), b, dtype=np.int64))
+
+    neighbor_owner = np.concatenate(neighbor_owner_parts) if neighbor_owner_parts else np.zeros(0, dtype=np.int64)
+    neighbor_cell = np.concatenate(neighbor_cell_parts) if neighbor_cell_parts else np.zeros(0, dtype=np.int64)
+    neighbor_point_1 = np.concatenate(neighbor_point_1_parts) if neighbor_point_1_parts else np.zeros(0, dtype=np.int64)
+    neighbor_point_2 = np.concatenate(neighbor_point_2_parts) if neighbor_point_2_parts else np.zeros(0, dtype=np.int64)
+
+    cell_neighbor_cells = _padded_rows(neighbor_owner, neighbor_cell)
+    cell_neighbor_point_1 = _padded_rows(neighbor_owner, neighbor_point_1)
+    cell_neighbor_point_2 = _padded_rows(neighbor_owner, neighbor_point_2)
+    if cell_neighbor_cells.shape[0] < cell_count:
+        width = cell_neighbor_cells.shape[1]
+        padded_cells = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_p1 = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_p2 = np.full((cell_count, width), -1, dtype=np.int64)
+        padded_cells[: cell_neighbor_cells.shape[0], :width] = cell_neighbor_cells
+        padded_p1[: cell_neighbor_point_1.shape[0], :width] = cell_neighbor_point_1
+        padded_p2[: cell_neighbor_point_2.shape[0], :width] = cell_neighbor_point_2
+        cell_neighbor_cells = padded_cells
+        cell_neighbor_point_1 = padded_p1
+        cell_neighbor_point_2 = padded_p2
+
+    return _DrsTopology(
+        point_cells=point_cells,
+        cell_points=cell_points,
+        cell_neighbor_cells=cell_neighbor_cells,
+        cell_neighbor_point_1=cell_neighbor_point_1,
+        cell_neighbor_point_2=cell_neighbor_point_2,
+    )
+
+
+def build_surface_selection_topology(payload) -> _DrsTopology | None:
+    if payload is None:
+        return None
+    cell_points, cell_count, point_count = payload
+    return build_drs_topology_from_cell_points(cell_points, cell_count, point_count)
+
+
+def install_drs_topology_cache(polydata, topology: _DrsTopology | None) -> bool:
+    if polydata is None or topology is None:
+        return False
+    if topology.cell_points.shape[0] != int(polydata.GetNumberOfCells()):
+        return False
+    if topology.point_cells.shape[0] < int(polydata.GetNumberOfPoints()):
+        return False
+    _trim_cache(_DRS_TOPOLOGY_CACHE)
+    _DRS_TOPOLOGY_CACHE[_polydata_cache_key(polydata)] = topology
+    return True
+
+
 def _polyline_length(points: np.ndarray, closed: bool = False) -> float:
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
     if pts.shape[0] < 2:
@@ -655,118 +807,11 @@ def _drs_topology(polydata) -> _DrsTopology | None:
     if cached is not None:
         return cached
 
-    cell_points = _polydata_cell_points(polydata)
-    if cell_points.shape[0] != cell_count:
+    payload = surface_selection_topology_input(polydata)
+    if payload is None:
         return None
-
-    valid = cell_points >= 0
-    point_ids = cell_points[valid]
-    owner_cells = np.repeat(np.arange(cell_count, dtype=np.int64), valid.sum(axis=1))
-    point_cells = _padded_rows(point_ids, owner_cells)
-    if point_cells.shape[0] < point_count:
-        padded = np.full((point_count, point_cells.shape[1]), -1, dtype=np.int64)
-        padded[: point_cells.shape[0], : point_cells.shape[1]] = point_cells
-        point_cells = padded
-
-    cell_sizes = valid.sum(axis=1).astype(np.int64, copy=False)
-    if cell_points.shape[1] > 0 and np.all(cell_sizes == cell_points.shape[1]):
-        edge_starts = cell_points
-        edge_ends = np.roll(cell_points, -1, axis=1)
-        edge_owner_array = np.repeat(np.arange(cell_count, dtype=np.int64), cell_points.shape[1])
-        edge_a_array = np.minimum(edge_starts, edge_ends).reshape(-1)
-        edge_b_array = np.maximum(edge_starts, edge_ends).reshape(-1)
-    else:
-        edge_owner: list[int] = []
-        edge_a: list[int] = []
-        edge_b: list[int] = []
-        for cell_id, size in enumerate(cell_sizes.tolist()):
-            if size < 2:
-                continue
-            points = cell_points[cell_id, :size]
-            starts = points
-            ends = np.roll(points, -1)
-            edge_owner.extend([cell_id] * int(size))
-            edge_a.extend(np.minimum(starts, ends).astype(np.int64).tolist())
-            edge_b.extend(np.maximum(starts, ends).astype(np.int64).tolist())
-        edge_owner_array = np.asarray(edge_owner, dtype=np.int64)
-        edge_a_array = np.asarray(edge_a, dtype=np.int64)
-        edge_b_array = np.asarray(edge_b, dtype=np.int64)
-
-    neighbor_owner_parts: list[np.ndarray] = []
-    neighbor_cell_parts: list[np.ndarray] = []
-    neighbor_point_1_parts: list[np.ndarray] = []
-    neighbor_point_2_parts: list[np.ndarray] = []
-    if edge_owner_array.size:
-        order = np.lexsort((edge_owner_array, edge_b_array, edge_a_array))
-        sorted_owner = edge_owner_array[order]
-        sorted_a = edge_a_array[order]
-        sorted_b = edge_b_array[order]
-        breaks = np.flatnonzero((np.diff(sorted_a) != 0) | (np.diff(sorted_b) != 0)) + 1
-        starts = np.r_[0, breaks]
-        ends = np.r_[breaks, sorted_owner.size]
-
-        group_sizes = ends - starts
-        paired = group_sizes == 2
-        if np.any(paired):
-            first = starts[paired]
-            second = first + 1
-            first_owner = sorted_owner[first]
-            second_owner = sorted_owner[second]
-            first_point = sorted_a[first]
-            second_point = sorted_b[first]
-            neighbor_owner_parts.append(np.concatenate([first_owner, second_owner]))
-            neighbor_cell_parts.append(np.concatenate([second_owner, first_owner]))
-            neighbor_point_1_parts.append(np.concatenate([first_point, first_point]))
-            neighbor_point_2_parts.append(np.concatenate([second_point, second_point]))
-
-        for start, end in zip(starts[~paired], ends[~paired]):
-            owners = np.unique(sorted_owner[start:end])
-            if owners.size < 2:
-                continue
-            a = int(sorted_a[start])
-            b = int(sorted_b[start])
-            owner_values: list[int] = []
-            neighbor_values: list[int] = []
-            for owner in owners.tolist():
-                for neighbor in owners.tolist():
-                    if neighbor == owner:
-                        continue
-                    owner_values.append(int(owner))
-                    neighbor_values.append(int(neighbor))
-            neighbor_owner_parts.append(np.asarray(owner_values, dtype=np.int64))
-            neighbor_cell_parts.append(np.asarray(neighbor_values, dtype=np.int64))
-            neighbor_point_1_parts.append(np.full(len(owner_values), a, dtype=np.int64))
-            neighbor_point_2_parts.append(np.full(len(owner_values), b, dtype=np.int64))
-
-    neighbor_owner = np.concatenate(neighbor_owner_parts) if neighbor_owner_parts else np.zeros(0, dtype=np.int64)
-    neighbor_cell = np.concatenate(neighbor_cell_parts) if neighbor_cell_parts else np.zeros(0, dtype=np.int64)
-    neighbor_point_1 = np.concatenate(neighbor_point_1_parts) if neighbor_point_1_parts else np.zeros(0, dtype=np.int64)
-    neighbor_point_2 = np.concatenate(neighbor_point_2_parts) if neighbor_point_2_parts else np.zeros(0, dtype=np.int64)
-
-    cell_neighbor_cells = _padded_rows(neighbor_owner, neighbor_cell)
-    cell_neighbor_point_1 = _padded_rows(neighbor_owner, neighbor_point_1)
-    cell_neighbor_point_2 = _padded_rows(neighbor_owner, neighbor_point_2)
-    if cell_neighbor_cells.shape[0] < cell_count:
-        width = cell_neighbor_cells.shape[1]
-        padded_cells = np.full((cell_count, width), -1, dtype=np.int64)
-        padded_p1 = np.full((cell_count, width), -1, dtype=np.int64)
-        padded_p2 = np.full((cell_count, width), -1, dtype=np.int64)
-        padded_cells[: cell_neighbor_cells.shape[0], :width] = cell_neighbor_cells
-        padded_p1[: cell_neighbor_point_1.shape[0], :width] = cell_neighbor_point_1
-        padded_p2[: cell_neighbor_point_2.shape[0], :width] = cell_neighbor_point_2
-        cell_neighbor_cells = padded_cells
-        cell_neighbor_point_1 = padded_p1
-        cell_neighbor_point_2 = padded_p2
-
-    topology = _DrsTopology(
-        point_cells=point_cells,
-        cell_points=cell_points,
-        cell_neighbor_cells=cell_neighbor_cells,
-        cell_neighbor_point_1=cell_neighbor_point_1,
-        cell_neighbor_point_2=cell_neighbor_point_2,
-    )
-    _trim_cache(_DRS_TOPOLOGY_CACHE)
-    _DRS_TOPOLOGY_CACHE[cache_key] = topology
+    topology = build_drs_topology_from_cell_points(*payload)
+    install_drs_topology_cache(polydata, topology)
     return topology
 
 

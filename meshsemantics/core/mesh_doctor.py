@@ -5,8 +5,8 @@ from typing import Callable
 
 import numpy as np
 from vtkmodules.util.numpy_support import vtk_to_numpy
-from vtkmodules.vtkCommonCore import vtkIdList, vtkIdTypeArray, vtkPoints
-from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData, vtkSelection, vtkSelectionNode, vtkTriangle
+from vtkmodules.vtkCommonCore import vtkIdList, vtkIdTypeArray
+from vtkmodules.vtkCommonDataModel import vtkPolyData, vtkSelection, vtkSelectionNode, vtkTriangle
 from vtkmodules.vtkFiltersCore import (
     vtkCleanPolyData,
     vtkFeatureEdges,

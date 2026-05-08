@@ -4,11 +4,8 @@ from PyQt6 import uic
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QComboBox,
     QDockWidget,
     QHeaderView,
-    QLabel,
-    QProgressBar,
     QMenu,
     QSizePolicy,
     QTableView,

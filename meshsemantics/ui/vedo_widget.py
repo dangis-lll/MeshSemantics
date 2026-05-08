@@ -8,7 +8,7 @@ import vedo
 from PyQt6.QtCore import QEvent, QTimer, pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QVBoxLayout, QWidget
-from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+from vtkmodules.util.numpy_support import numpy_to_vtk
 from vtkmodules.vtkCommonCore import vtkIdTypeArray, vtkLookupTable
 from vtkmodules.vtkCommonDataModel import vtkSelection, vtkSelectionNode
 from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
@@ -170,8 +170,6 @@ class VedoWidget(QWidget):
         self.lookup_table.SetNumberOfTableValues(257)
         self.lookup_table.Build()
 
-        self.cell_centers = np.zeros((0, 3), dtype=np.float64)
-        self.cell_normals = np.zeros((0, 3), dtype=np.float64)
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
@@ -213,7 +211,6 @@ class VedoWidget(QWidget):
         self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1).copy()
         self.display_labels = self.base_labels.copy()
         self.preview_cell_ids = np.zeros(0, dtype=np.int32)
-        self._rebuild_geometry_cache()
         self._apply_lookup_table(colormap)
         self._bind_label_array()
         self._mark_label_array_modified()
@@ -231,8 +228,6 @@ class VedoWidget(QWidget):
         self.display_labels = np.zeros(0, dtype=np.int32)
         self.preview_cell_ids = np.zeros(0, dtype=np.int32)
         self._label_vtk_array = None
-        self.cell_centers = np.zeros((0, 3), dtype=np.float64)
-        self.cell_normals = np.zeros((0, 3), dtype=np.float64)
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
@@ -240,9 +235,7 @@ class VedoWidget(QWidget):
         self.selected_landmark_actor = None
         self.issue_highlight_actor = None
         self._surface_cache_generation += 1
-        if self._surface_cache_future is not None:
-            self._surface_cache_future.cancel()
-            self._surface_cache_future = None
+        self._stop_surface_cache_worker()
         self.render()
 
     def set_colormap(self, colormap: dict[str, tuple[int, int, int]]) -> None:
@@ -470,19 +463,6 @@ class VedoWidget(QWidget):
             return spheres(coords, r=float(radius)).c(color)
         return vedo.Points(coords, r=max(1, int(round(radius)))).c(color)
 
-    def _rebuild_geometry_cache(self) -> None:
-        if self.mesh is None:
-            self.cell_centers = np.zeros((0, 3), dtype=np.float64)
-            self.cell_normals = np.zeros((0, 3), dtype=np.float64)
-            return
-        self.cell_centers = np.asarray(self.mesh.cell_centers().coordinates, dtype=np.float64)
-        self.mesh.compute_normals(cells=True, points=False)
-        normals = self.mesh.dataset.GetCellData().GetNormals()
-        if normals is None:
-            self.cell_normals = np.zeros_like(self.cell_centers)
-        else:
-            self.cell_normals = vtk_to_numpy(normals).astype(np.float64)
-
     def _start_surface_selection_cache_process(self) -> None:
         self._surface_cache_generation += 1
         generation = self._surface_cache_generation
@@ -517,13 +497,16 @@ class VedoWidget(QWidget):
         install_drs_topology_cache(self.mesh.dataset, topology)
 
     def closeEvent(self, event) -> None:
+        self._stop_surface_cache_worker()
+        super().closeEvent(event)
+
+    def _stop_surface_cache_worker(self) -> None:
         if self._surface_cache_future is not None:
             self._surface_cache_future.cancel()
             self._surface_cache_future = None
         if self._surface_cache_executor is not None:
             self._surface_cache_executor.shutdown(wait=False, cancel_futures=True)
             self._surface_cache_executor = None
-        super().closeEvent(event)
 
     def _remove_control_actors(self) -> None:
         for actor in [self.control_points_actor, self.control_line_actor, self.selected_control_actor]:

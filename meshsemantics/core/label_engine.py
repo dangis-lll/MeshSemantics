@@ -6,7 +6,7 @@ import numpy as np
 
 
 class LabelEngine:
-    def __init__(self, undo_limit: int = 50) -> None:
+    def __init__(self) -> None:
         self.label_array = np.zeros(0, dtype=np.int32)
 
     def reset(self, labels: np.ndarray | Iterable[int]) -> None:

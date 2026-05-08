@@ -1,5 +1,11 @@
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.cpython-*.pyc
+
+dist/
+*.exe
+**/.meshsemantics_status.csv
 
 .pytest_cache/
 .mypy_cache/
@@ -11,3 +17,5 @@ env/
 
 .DS_Store
 Thumbs.db
+
+courses/

@@ -498,7 +498,10 @@ class MeshInteractor(QObject):
         polydata = self.vedo_widget.mesh.dataset if self.vedo_widget.mesh is not None else None
         if polydata is None:
             return None
-        mtime = int(polydata.GetMTime())
+        if hasattr(polydata, "GetMeshMTime"):
+            mtime = int(polydata.GetMeshMTime())
+        else:
+            mtime = int(polydata.GetMTime())
         if self._surface_picker_mtime != mtime:
             self._surface_picker_tree.SetDataSet(polydata)
             self._surface_picker_tree.BuildLocator()

@@ -6,13 +6,12 @@ import numpy as np
 from vtkmodules.vtkCommonComputationalGeometry import vtkKochanekSpline, vtkParametricSpline
 from vtkmodules.vtkCommonCore import vtkPoints, reference
 from vtkmodules.vtkCommonDataModel import vtkGenericCell, vtkPointLocator
-from vtkmodules.vtkFiltersCore import vtkCleanPolyData, vtkClipPolyData, vtkPolyDataConnectivityFilter, vtkPolyDataNormals
+from vtkmodules.vtkFiltersCore import vtkCleanPolyData, vtkClipPolyData, vtkPolyDataConnectivityFilter
 from vtkmodules.vtkFiltersModeling import vtkDijkstraGraphGeodesicPath
 from vtkmodules.vtkFiltersCore import vtkGenerateIds as vtkIdFilter
 from vtkmodules.vtkFiltersModeling import vtkSelectPolyData
 from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
 from vtkmodules.vtkCommonDataModel import vtkCellLocator
-from vtkmodules.vtkRenderingCore import vtkCellPicker
 from vtkmodules.util.numpy_support import vtk_to_numpy
 
 
@@ -69,15 +68,6 @@ def _cached_point_locator(polydata) -> vtkPointLocator:
         _trim_cache(_POINT_LOCATOR_CACHE)
         _POINT_LOCATOR_CACHE[cache_key] = locator
     return locator
-
-
-def warm_surface_selection_cache(polydata) -> None:
-    """Build reusable surface-selection indexes before the user asks for a preview."""
-    if polydata is None or polydata.GetNumberOfCells() == 0:
-        return
-    _cached_cell_locator(polydata)
-    _cached_point_locator(polydata)
-    _drs_topology(polydata)
 
 
 def surface_selection_topology_input(polydata) -> tuple[np.ndarray, int, int] | None:
@@ -340,131 +330,6 @@ def project_spline_to_surface_by_closest_points(polydata, spline_points_world: n
     return snap_points_to_surface(polydata, spline)
 
 
-def _polydata_with_cell_normals(polydata):
-    normals = polydata.GetCellData().GetNormals()
-    if normals is not None and normals.GetNumberOfTuples() == polydata.GetNumberOfCells():
-        return polydata
-
-    normal_filter = vtkPolyDataNormals()
-    normal_filter.SetInputData(polydata)
-    normal_filter.ComputeCellNormalsOn()
-    normal_filter.ComputePointNormalsOff()
-    normal_filter.SplittingOff()
-    normal_filter.ConsistencyOn()
-    normal_filter.Update()
-    return normal_filter.GetOutput()
-
-
-def _find_closest_point_and_cell(locator: vtkCellLocator, point: np.ndarray) -> tuple[np.ndarray, int]:
-    generic_cell = vtkGenericCell()
-    cell_id = reference(0)
-    sub_id = reference(0)
-    dist2 = reference(0.0)
-    closest = [0.0, 0.0, 0.0]
-    locator.FindClosestPoint(
-        [float(point[0]), float(point[1]), float(point[2])],
-        closest,
-        generic_cell,
-        cell_id,
-        sub_id,
-        dist2,
-    )
-    return np.asarray(closest, dtype=np.float64), int(cell_id)
-
-
-def _intersect_locator_line(locator: vtkCellLocator, p1: np.ndarray, p2: np.ndarray) -> np.ndarray | None:
-    t = reference(0.0)
-    x = [0.0, 0.0, 0.0]
-    pcoords = [0.0, 0.0, 0.0]
-    sub_id = reference(0)
-    cell_id = reference(0)
-    start = [float(p1[0]), float(p1[1]), float(p1[2])]
-    end = [float(p2[0]), float(p2[1]), float(p2[2])]
-    try:
-        hit = locator.IntersectWithLine(start, end, 1e-6, t, x, pcoords, sub_id, cell_id)
-    except TypeError:
-        hit = locator.IntersectWithLine(start, end, 1e-6, t, x, pcoords, sub_id)
-    if not hit:
-        return None
-    return np.asarray(x, dtype=np.float64)
-
-
-def project_spline_to_surface_by_normals(
-    polydata,
-    control_points_world: np.ndarray | list[tuple[float, float, float]],
-    spline_points_world: np.ndarray,
-    closed: bool = False,
-) -> np.ndarray:
-    """Project spline points onto the surface using DRS-style control-point normals."""
-    controls = np.asarray(control_points_world, dtype=np.float64).reshape(-1, 3)
-    spline = np.asarray(spline_points_world, dtype=np.float64).reshape(-1, 3)
-    if controls.shape[0] < 2 or spline.shape[0] < 2:
-        return snap_points_to_surface(polydata, spline)
-
-    normal_polydata = _polydata_with_cell_normals(polydata)
-    locator = _cached_cell_locator(normal_polydata)
-
-    normals = normal_polydata.GetCellData().GetNormals()
-    if normals is None or normals.GetNumberOfTuples() == 0:
-        return snap_points_to_surface(polydata, spline)
-
-    control_normals = []
-    control_indices = []
-    for control in controls:
-        _closest, cell_id = _find_closest_point_and_cell(locator, control)
-        cell_id = max(0, min(int(cell_id), normals.GetNumberOfTuples() - 1))
-        normal = np.asarray(normals.GetTuple(cell_id), dtype=np.float64)
-        norm = float(np.linalg.norm(normal))
-        if norm <= 1e-12:
-            normal = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        else:
-            normal = normal / norm
-        control_normals.append(normal)
-        control_indices.append(int(np.argmin(np.linalg.norm(spline - control[None, :], axis=1))))
-
-    control_indices = np.asarray(control_indices, dtype=np.int32)
-    order = np.argsort(control_indices)
-    control_indices = control_indices[order]
-    control_normals = [control_normals[int(i)] for i in order]
-
-    bounds = normal_polydata.GetBounds()
-    ray_length = float(np.linalg.norm([bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]])) * 2.0
-    if not np.isfinite(ray_length) or ray_length <= 0.0:
-        ray_length = 1.0
-
-    closest_fallback = snap_points_to_surface(normal_polydata, spline)
-    projected = np.empty_like(spline)
-    for index, point in enumerate(spline):
-        insert_at = int(np.searchsorted(control_indices, index, side="right"))
-        if insert_at <= 0:
-            normal = control_normals[0]
-        elif insert_at >= len(control_normals):
-            if closed and len(control_normals) > 1:
-                normal = control_normals[-1] + control_normals[0]
-                norm = float(np.linalg.norm(normal))
-                normal = normal / norm if norm > 1e-12 else control_normals[-1]
-            else:
-                normal = control_normals[-1]
-        else:
-            normal = control_normals[insert_at - 1] + control_normals[insert_at]
-            norm = float(np.linalg.norm(normal))
-            normal = normal / norm if norm > 1e-12 else control_normals[insert_at - 1]
-
-        p1 = point + normal * ray_length
-        p2 = point - normal * ray_length
-        hit = _intersect_locator_line(locator, p1, p2)
-        projected[index] = hit if hit is not None else closest_fallback[index]
-
-    deltas = np.linalg.norm(np.diff(projected, axis=0), axis=1)
-    keep = np.ones(projected.shape[0], dtype=bool)
-    keep[1:] = deltas > 1e-6
-    projected = projected[keep]
-
-    if closed and projected.shape[0] >= 3 and not np.allclose(projected[0], projected[-1]):
-        projected = np.vstack([projected, projected[0]])
-    return projected
-
-
 def build_surface_contour_line(
     polydata,
     control_points_world: np.ndarray | list[tuple[float, float, float]],
@@ -495,69 +360,6 @@ def build_surface_contour_line(
     return snapped
 
 
-def build_surface_spline_loop(
-    polydata,
-    control_points_world: np.ndarray | list[tuple[float, float, float]],
-    samples: int | None = None,
-    closed: bool = False,
-) -> np.ndarray:
-    return build_surface_contour_line(
-        polydata,
-        control_points_world,
-        samples=samples,
-        closed=closed,
-    )
-
-
-def smooth_closed_curve(points_2d: np.ndarray, samples: int = 200, closed: bool = True) -> np.ndarray:
-    points = np.asarray(points_2d, dtype=np.float64)
-    if points.shape[0] < 2:
-        return points
-    source = points
-    if source.shape[0] == 2:
-        return np.linspace(source[0], source[-1], samples)
-
-    vtk_points = vtkPoints()
-    for point in source:
-        vtk_points.InsertNextPoint(float(point[0]), float(point[1]), 0.0)
-
-    spline = vtkParametricSpline()
-    spline.SetPoints(vtk_points)
-    if hasattr(spline, "ClosedOn"):
-        if closed and points.shape[0] >= 3:
-            spline.ClosedOn()
-        else:
-            spline.ClosedOff()
-
-    function_source = vtkParametricFunctionSource()
-    function_source.SetParametricFunction(spline)
-    function_source.SetUResolution(max(2, int(samples) - 1))
-    function_source.Update()
-
-    sampled = vtk_to_numpy(function_source.GetOutput().GetPoints().GetData())
-    if sampled.size == 0 or np.isnan(sampled).any():
-        return points
-    return sampled[:, :2]
-
-
-def points_in_polygon(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
-    x = points[:, 0]
-    y = points[:, 1]
-    poly_x = polygon[:, 0]
-    poly_y = polygon[:, 1]
-    inside = np.zeros(points.shape[0], dtype=bool)
-    j = len(polygon) - 1
-    for i in range(len(polygon)):
-        xi, yi = poly_x[i], poly_y[i]
-        xj, yj = poly_x[j], poly_y[j]
-        intersects = ((yi > y) != (yj > y)) & (
-            x < (xj - xi) * (y - yi) / ((yj - yi) + 1e-12) + xi
-        )
-        inside ^= intersects
-        j = i
-    return inside
-
-
 def project_world_to_display(renderer, world_points: np.ndarray) -> np.ndarray:
     width, height = renderer.GetSize()
     if width <= 0 or height <= 0:
@@ -575,50 +377,6 @@ def project_world_to_display(renderer, world_points: np.ndarray) -> np.ndarray:
     x = (ndc[:, 0] + 1.0) * 0.5 * width
     y = (ndc[:, 1] + 1.0) * 0.5 * height
     return np.column_stack([x, y])
-
-
-def camera_forward_vector(renderer) -> np.ndarray:
-    camera = renderer.GetActiveCamera()
-    position = np.array(camera.GetPosition(), dtype=np.float64)
-    focal = np.array(camera.GetFocalPoint(), dtype=np.float64)
-    vec = focal - position
-    norm = np.linalg.norm(vec)
-    if norm < 1e-12:
-        return np.array([0.0, 0.0, -1.0], dtype=np.float64)
-    return vec / norm
-
-
-def select_cells_by_screen_polygon(
-    renderer,
-    cell_centers: np.ndarray,
-    cell_normals: np.ndarray,
-    polygon_points: np.ndarray,
-    exclude_backfaces: bool = True,
-    visible_only: bool = True,
-) -> np.ndarray:
-    polygon = smooth_closed_curve(polygon_points, closed=True)
-    if polygon.shape[0] < 3 or cell_centers.size == 0:
-        return np.zeros(0, dtype=np.int32)
-
-    centers_2d = project_world_to_display(renderer, cell_centers)
-    mask = points_in_polygon(centers_2d, polygon)
-    if exclude_backfaces and cell_normals.size:
-        view_dir = camera_forward_vector(renderer)
-        facing = np.einsum("ij,j->i", cell_normals, view_dir) < 0.0
-        mask &= facing
-    candidate_ids = np.flatnonzero(mask).astype(np.int32)
-    if not visible_only or candidate_ids.size == 0:
-        return candidate_ids
-
-    projected_candidates = centers_2d[candidate_ids]
-    picker = vtkCellPicker()
-    picker.SetTolerance(0.0005)
-    visible_ids: list[int] = []
-    for cell_id, point in zip(candidate_ids.tolist(), projected_candidates.tolist()):
-        picker.Pick(float(point[0]), float(point[1]), 0.0, renderer)
-        if picker.GetCellId() == int(cell_id):
-            visible_ids.append(int(cell_id))
-    return np.asarray(visible_ids, dtype=np.int32)
 
 
 def select_cells_by_surface_loop(polydata, loop_points_world) -> np.ndarray:

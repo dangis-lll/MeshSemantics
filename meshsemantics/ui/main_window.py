@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QCheckBox,
     QAbstractSpinBox,
     QLabel,
     QProgressBar,

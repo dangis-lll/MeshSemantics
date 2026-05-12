@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from PyQt6 import uic
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QDockWidget,
     QHeaderView,
     QMenu,
+    QProgressBar,
     QSizePolicy,
+    QStyle,
+    QStyleOptionProgressBar,
     QTableView,
     QWidget,
 )
@@ -20,6 +23,41 @@ from meshsemantics.core.project_dataset import (
     STATUS_UNLABELED,
 )
 from meshsemantics.runtime import ui_path
+
+
+class CompletionProgressBar(QProgressBar):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._count_text = "Completed: 0 / 0"
+        self._percent_text = "0%"
+        self.setRange(0, 100)
+        self.setValue(0)
+        self.setTextVisible(False)
+        self.setMinimumHeight(34)
+
+    def set_completion(self, completed: int, total: int) -> None:
+        percent = int(round((completed / total) * 100)) if total > 0 else 0
+        self._count_text = f"Completed: {completed} / {total}"
+        self._percent_text = f"{percent}%"
+        self.setValue(percent)
+        self.setToolTip(f"{self._count_text} ({self._percent_text})" if total > 0 else "")
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        option = QStyleOptionProgressBar()
+        self.initStyleOption(option)
+        option.textVisible = False
+
+        painter = QPainter(self)
+        self.style().drawControl(QStyle.ControlElement.CE_ProgressBar, option, painter, self)
+
+        text_rect = self.rect().adjusted(12, 0, -12, 0)
+        percent_width = 72
+        count_rect = text_rect.adjusted(0, 0, -percent_width, 0)
+        percent_rect = QRect(text_rect.right() - percent_width, text_rect.top(), percent_width, text_rect.height())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(count_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), self._count_text)
+        painter.drawText(percent_rect, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight), self._percent_text)
 
 
 class FileTableModel(QAbstractTableModel):
@@ -252,6 +290,15 @@ class FileTableModel(QAbstractTableModel):
     def loaded_rows(self) -> int:
         return self._loaded_rows
 
+    def completion_counts(self) -> tuple[int, int]:
+        if self._project is None:
+            return (0, 0)
+        completed = 0
+        for entry in self._project.entries:
+            if self._status_for_entry(entry.work_path) == STATUS_COMPLETED:
+                completed += 1
+        return (completed, len(self._project.entries))
+
     def _collect_visible_rows(self) -> list[int]:
         if self._project is None:
             return []
@@ -333,6 +380,7 @@ class FilePanel(QDockWidget):
         self.panel_frame = content.panel_frame
         self.search_edit = content.search_edit
         self.status_filter = content.status_filter
+        self.completion_progress = self._replace_completion_progress(content.completion_progress)
         self.table = content.table
         self.progress_label = content.progress_label
         self.progress = content.progress
@@ -370,6 +418,8 @@ class FilePanel(QDockWidget):
         self.progress_label.setProperty("role", "caption")
 
     def _configure_widgets(self) -> None:
+        self.completion_progress.setVisible(False)
+
         self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.progress_label.setMinimumWidth(0)
         self.progress_label.setVisible(False)
@@ -382,6 +432,25 @@ class FilePanel(QDockWidget):
         self.status_filter.addItem("In Progress", STATUS_IN_PROGRESS)
         self.status_filter.addItem("Completed", STATUS_COMPLETED)
         self.status_filter.addItem("Failed", STATUS_FAILED)
+
+    def _replace_completion_progress(self, placeholder: QProgressBar) -> CompletionProgressBar:
+        parent = placeholder.parentWidget()
+        replacement = CompletionProgressBar(parent)
+        replacement.setObjectName(placeholder.objectName())
+        layout = parent.layout() if parent is not None else None
+        if layout is None:
+            placeholder.setParent(None)
+            placeholder.deleteLater()
+            return replacement
+
+        index = layout.indexOf(placeholder)
+        if index >= 0:
+            layout.takeAt(index)
+        placeholder.setParent(None)
+        placeholder.deleteLater()
+        if index >= 0:
+            layout.insertWidget(index, replacement)
+        return replacement
 
     def sizeHint(self) -> QSize:
         hint = super().sizeHint()
@@ -412,6 +481,7 @@ class FilePanel(QDockWidget):
         previous_scroll = self.table.verticalScrollBar().value() if preserve_view else None
         self._project = project
         self.model.set_project(project)
+        self._refresh_completion_progress()
         if restore_selection:
             self._restore_selection(project.current_path if project is not None else None)
         elif preserve_view and previous_row >= 0:
@@ -461,6 +531,7 @@ class FilePanel(QDockWidget):
 
     def update_status(self, path: str, status: str) -> None:
         self.model.update_status(path, status)
+        self._refresh_completion_progress()
         self._sync_buttons()
 
     def _queue_search_text(self) -> None:
@@ -469,11 +540,13 @@ class FilePanel(QDockWidget):
     def _apply_search_text(self) -> None:
         self.model.set_filter_text(self.search_edit.text())
         self._restore_selection(self._project.current_path if self._project is not None else None)
+        self._refresh_completion_progress()
         self._sync_buttons()
 
     def _on_status_filter_changed(self) -> None:
         self.model.set_status_filter(self.status_filter.currentData())
         self._restore_selection(self._project.current_path if self._project is not None else None)
+        self._refresh_completion_progress()
         self._sync_buttons()
 
     def _emit_selected(self, index: QModelIndex) -> None:
@@ -513,6 +586,16 @@ class FilePanel(QDockWidget):
 
     def _sync_buttons(self) -> None:
         return
+
+    def _refresh_completion_progress(self) -> None:
+        completed, total = self.model.completion_counts()
+        has_project = total > 0
+        self.completion_progress.setVisible(has_project)
+        if not has_project:
+            self.completion_progress.set_completion(0, 0)
+            return
+
+        self.completion_progress.set_completion(completed, total)
 
     def has_previous_model(self) -> bool:
         return self.model.previous_path_before(self.selected_path()) is not None

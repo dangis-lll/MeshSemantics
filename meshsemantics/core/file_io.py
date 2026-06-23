@@ -12,7 +12,7 @@ from meshsemantics.core.label_engine import LabelEngine
 
 
 class FileIO:
-    SUPPORTED_SUFFIXES = {".stl", ".vtp", ".ply"}
+    SUPPORTED_SUFFIXES = {".stl", ".vtp", ".ply", ".obj"}
 
     @staticmethod
     def _normalize_mesh(loaded, file_path: Path):

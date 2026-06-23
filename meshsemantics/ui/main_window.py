@@ -286,6 +286,9 @@ class BusyOverlay(QWidget):
 
 
 class MainWindow(QMainWindow):
+    def _should_show_mesh_doctor_panel(self) -> bool:
+        return False
+
     def __init__(self) -> None:
         super().__init__()
         self.settings = load_settings()
@@ -334,7 +337,13 @@ class MainWindow(QMainWindow):
         self.mesh_doctor_panel = MeshDoctorPanel()
         self._last_mesh_check_report: MeshDoctorReport | None = None
         self._last_mesh_check_config: MeshDoctorCheckConfig | None = None
-        self.panel_dock = PanelDockWidget(self.label_panel, self.landmark_panel, self.mesh_doctor_panel)
+        self.show_mesh_doctor_panel = self._should_show_mesh_doctor_panel()
+        self.panel_dock = PanelDockWidget(
+            self.label_panel,
+            self.landmark_panel,
+            self.mesh_doctor_panel,
+            show_mesh_doctor_panel=self.show_mesh_doctor_panel,
+        )
         self.interactor = MeshInteractor(self.vedo_widget, self.settings, self)
 
         self._configure_window()
@@ -863,6 +872,8 @@ class MainWindow(QMainWindow):
         )
 
     def setcurrentpanel(self, panel: str) -> None:
+        if panel == "meshdoctor" and not self.show_mesh_doctor_panel:
+            panel = "label"
         if panel not in {"label", "landmark", "meshdoctor"}:
             return
         previous_panel = self.currentPanel
@@ -1028,7 +1039,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Mesh",
             str(self.last_open_dir),
-            "Meshes (*.stl *.vtp *.ply)",
+            "Meshes (*.stl *.vtp *.ply *.obj)",
         )
         if file_path:
             normalized_path = normalize_path(file_path)

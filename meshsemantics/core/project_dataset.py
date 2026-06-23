@@ -107,10 +107,11 @@ def scan_project_dataset(
 
     for relative_key, variants in groups.items():
         stl_item = variants.get(".stl")
+        obj_item = variants.get(".obj")
         ply_item = variants.get(".ply")
         vtp_item = variants.get(".vtp")
-        source_item = stl_item or ply_item or vtp_item
-        work_item = vtp_item or ply_item or stl_item
+        source_item = stl_item or obj_item or ply_item or vtp_item
+        work_item = vtp_item or ply_item or stl_item or obj_item
         source = source_item[0] if source_item is not None else None
         work = work_item[0] if work_item is not None else None
         if source is None or work is None:

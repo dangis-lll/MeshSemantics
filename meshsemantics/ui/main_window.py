@@ -362,6 +362,10 @@ class MainWindow(QMainWindow):
         self.setcurrentpanel("label")
         self._build_floating_action_bar()
         self.label_panel.set_overwrite_existing_labels(bool(self.settings.get("overwrite_existing_labels", False)))
+        self.label_panel.set_display_mode(str(self.settings.get("display_mode", "label_overlay")))
+        self.label_panel.set_overlay_opacity(float(self.settings.get("overlay_opacity", 0.4)))
+        self.vedo_widget.set_display_mode(self.label_panel.display_mode())
+        self.vedo_widget.set_overlay_opacity(self.label_panel.overlay_opacity())
         self.statusBar().showMessage("Ready")
 
     def createPopupMenu(self):
@@ -727,6 +731,8 @@ class MainWindow(QMainWindow):
         self.label_panel.remap_requested.connect(self._remap_labels)
         self.label_panel.delete_requested.connect(self._delete_label)
         self.label_panel.overwrite_mode_changed.connect(self._on_overwrite_mode_changed)
+        self.label_panel.display_mode_changed.connect(self._on_display_mode_changed)
+        self.label_panel.overlay_opacity_changed.connect(self._on_overlay_opacity_changed)
         self.label_panel.panel_activated.connect(lambda: self.setcurrentpanel("label"))
         self.landmark_panel.add_requested.connect(self._add_landmark)
         self.landmark_panel.rename_requested.connect(self._rename_landmark)
@@ -775,6 +781,7 @@ class MainWindow(QMainWindow):
         )
         self._register_shortcut("E", self, {"label"}, self.interactor.apply_preview, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("C", self, {"label"}, self.interactor.clear_preview, enabled_when=self._shortcut_can_use_plain_action)
+        self._register_shortcut("V", self, {"label", "meshdoctor"}, self._cycle_display_mode, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut("M", self, {"label", "landmark"}, self.toggle_task_completed, enabled_when=self._shortcut_can_use_plain_action)
         self._register_shortcut(
             QKeySequence.StandardKey.Undo,
@@ -1021,7 +1028,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Mesh",
             str(self.last_open_dir),
-            "Meshes (*.stl *.vtp)",
+            "Meshes (*.stl *.vtp *.ply)",
         )
         if file_path:
             normalized_path = normalize_path(file_path)
@@ -1326,7 +1333,7 @@ class MainWindow(QMainWindow):
         suffix = target_path.suffix.lower()
         if suffix == ".json":
             self._set_last_open_dir(target_path.parent)
-            FileIO.save_labels_json(target_path, self.label_engine.label_array)
+            FileIO.save_labels_json(target_path, self.label_engine.label_array, mesh=self.vedo_widget.mesh)
             self.statusBar().showMessage(f"Saved JSON to {target_path}")
             return True
         if suffix == ".stl":
@@ -1369,7 +1376,7 @@ class MainWindow(QMainWindow):
         if not target:
             return
         self._set_last_open_dir(Path(target).parent)
-        FileIO.save_labels_json(target, self.label_engine.label_array)
+        FileIO.save_labels_json(target, self.label_engine.label_array, mesh=self.vedo_widget.mesh)
         self.statusBar().showMessage(f"Saved JSON to {target}")
 
     def _import_labels_json(self, file_path: str | Path) -> bool:
@@ -1553,6 +1560,27 @@ class MainWindow(QMainWindow):
     def _on_overwrite_mode_changed(self, enabled: bool) -> None:
         self.settings["overwrite_existing_labels"] = bool(enabled)
         self._schedule_settings_save()
+
+    def _on_display_mode_changed(self, mode: str) -> None:
+        self.settings["display_mode"] = str(mode)
+        self._schedule_settings_save()
+        self.vedo_widget.set_display_mode(str(mode))
+
+    def _on_overlay_opacity_changed(self, opacity: float) -> None:
+        self.settings["overlay_opacity"] = float(opacity)
+        self._schedule_settings_save()
+        self.vedo_widget.set_overlay_opacity(float(opacity))
+
+    def _cycle_display_mode(self) -> None:
+        modes = ("source_color", "label_overlay", "label_only")
+        current = self.label_panel.display_mode()
+        try:
+            index = modes.index(current)
+        except ValueError:
+            index = 0
+        next_mode = modes[(index + 1) % len(modes)]
+        self.label_panel.set_display_mode(next_mode)
+        self._on_display_mode_changed(next_mode)
 
     def _select_label_for_cell(self, cell_id: int) -> None:
         if cell_id < 0 or cell_id >= self.label_engine.size:
@@ -1901,6 +1929,8 @@ class MainWindow(QMainWindow):
             self.label_panel.restore_state(state.get("label_ui", {}))
             self.colormap = self.label_panel.colormap()
             save_colormap(self.colormap)
+            self.vedo_widget.set_display_mode(self.label_panel.display_mode())
+            self.vedo_widget.set_overlay_opacity(self.label_panel.overlay_opacity())
             mesh_state = state.get("mesh")
             if isinstance(mesh_state, dict) and mesh_state.get("polydata") is not None:
                 restored_mesh = FileIO._normalize_mesh(

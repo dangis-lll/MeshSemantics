@@ -8,13 +8,18 @@ from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
+    QComboBox,
     QFrame,
+    QHBoxLayout,
     QAbstractSpinBox,
     QHeaderView,
+    QLabel,
+    QSlider,
     QSizePolicy,
     QAbstractItemView,
     QTableWidget,
     QTableWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -43,6 +48,8 @@ class LabelPanel(QWidget):
     remap_requested = pyqtSignal(int, int)
     delete_requested = pyqtSignal(int)
     overwrite_mode_changed = pyqtSignal(bool)
+    display_mode_changed = pyqtSignal(str)
+    overlay_opacity_changed = pyqtSignal(float)
     completion_toggle_requested = pyqtSignal()
     quick_save_requested = pyqtSignal()
 
@@ -62,6 +69,7 @@ class LabelPanel(QWidget):
         content = self
         self._apply_ui_properties()
         self._replace_color_chip_placeholder()
+        self._build_display_controls()
         self._configure_widgets(max_label)
         self._bind_signals()
         self._activation_widgets = [
@@ -79,6 +87,8 @@ class LabelPanel(QWidget):
             self.table.viewport(),
             self.overwrite_checkbox,
             self.delete_label_button,
+            self.display_mode_combo,
+            self.overlay_opacity_slider,
         ]
         for widget in self._activation_widgets:
             widget.installEventFilter(self)
@@ -103,6 +113,41 @@ class LabelPanel(QWidget):
         layout.insertWidget(index, self.color_chip, 1)
         layout.removeWidget(placeholder)
         placeholder.deleteLater()
+
+    def _build_display_controls(self) -> None:
+        self.display_frame = QFrame(self)
+        self.display_frame.setObjectName("display-frame")
+        self.display_frame.setProperty("panel", True)
+        layout = QVBoxLayout(self.display_frame)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("Display", self.display_frame)
+        title.setProperty("role", "caption")
+        layout.addWidget(title)
+
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("Mode", self.display_frame)
+        self.display_mode_combo = QComboBox(self.display_frame)
+        self.display_mode_combo.addItem("Source Color", "source_color")
+        self.display_mode_combo.addItem("Label Overlay", "label_overlay")
+        self.display_mode_combo.addItem("Label Only", "label_only")
+        mode_row.addWidget(mode_label)
+        mode_row.addWidget(self.display_mode_combo, 1)
+        layout.addLayout(mode_row)
+
+        opacity_row = QHBoxLayout()
+        opacity_label = QLabel("Overlay", self.display_frame)
+        self.overlay_opacity_slider = QSlider(Qt.Orientation.Horizontal, self.display_frame)
+        self.overlay_opacity_slider.setRange(0, 80)
+        self.overlay_opacity_slider.setValue(40)
+        self.overlay_opacity_value = QLabel("40%", self.display_frame)
+        opacity_row.addWidget(opacity_label)
+        opacity_row.addWidget(self.overlay_opacity_slider, 1)
+        opacity_row.addWidget(self.overlay_opacity_value)
+        layout.addLayout(opacity_row)
+
+        self.outer_layout.insertWidget(1, self.display_frame)
 
     def _configure_widgets(self, max_label: int) -> None:
         self.label_spin.setRange(0, max(0, max_label))
@@ -146,6 +191,8 @@ class LabelPanel(QWidget):
         self.table.itemDoubleClicked.connect(self._edit_color)
         self.table.itemChanged.connect(self._sync_colormap_from_table)
         self.table.itemSelectionChanged.connect(self._sync_current_label_from_selection)
+        self.display_mode_combo.currentIndexChanged.connect(self._emit_display_mode_changed)
+        self.overlay_opacity_slider.valueChanged.connect(self._emit_overlay_opacity_changed)
 
     def current_label(self) -> int:
         return int(self.label_spin.value())
@@ -158,15 +205,21 @@ class LabelPanel(QWidget):
             "colormap": self.colormap(),
             "current_label": self.current_label(),
             "overwrite_existing": self.overwrite_existing_labels(),
+            "display_mode": self.display_mode(),
+            "overlay_opacity": self.overlay_opacity(),
         }
 
     def restore_state(self, state: dict) -> None:
         colormap = state.get("colormap", self.colormap())
         current_label = int(state.get("current_label", 0))
         overwrite_existing = bool(state.get("overwrite_existing", False))
+        display_mode = str(state.get("display_mode", self.display_mode()))
+        overlay_opacity = float(state.get("overlay_opacity", self.overlay_opacity()))
         with self._block_history():
             self.set_colormap(colormap)
             self.set_overwrite_existing_labels(overwrite_existing)
+            self.set_display_mode(display_mode)
+            self.set_overlay_opacity(overlay_opacity)
             self.label_spin.setValue(current_label)
         self._last_current_label = self.current_label()
 
@@ -251,6 +304,27 @@ class LabelPanel(QWidget):
         self.overwrite_checkbox.setChecked(bool(enabled))
         self.overwrite_checkbox.blockSignals(False)
 
+    def display_mode(self) -> str:
+        return str(self.display_mode_combo.currentData() or "label_overlay")
+
+    def set_display_mode(self, mode: str) -> None:
+        index = self.display_mode_combo.findData(str(mode))
+        if index < 0:
+            index = self.display_mode_combo.findData("label_overlay")
+        self.display_mode_combo.blockSignals(True)
+        self.display_mode_combo.setCurrentIndex(max(0, index))
+        self.display_mode_combo.blockSignals(False)
+
+    def overlay_opacity(self) -> float:
+        return float(self.overlay_opacity_slider.value()) / 100.0
+
+    def set_overlay_opacity(self, opacity: float) -> None:
+        value = int(round(max(0.0, min(0.8, float(opacity))) * 100.0))
+        self.overlay_opacity_slider.blockSignals(True)
+        self.overlay_opacity_slider.setValue(value)
+        self.overlay_opacity_slider.blockSignals(False)
+        self.overlay_opacity_value.setText(f"{value}%")
+
     def set_current_label(self, label: int, sync_remap_source: bool = True) -> None:
         label = int(label)
         with self._block_history():
@@ -322,6 +396,13 @@ class LabelPanel(QWidget):
         before_state["overwrite_existing"] = not enabled
         self.overwrite_mode_changed.emit(enabled)
         self.history_requested.emit(before_state)
+
+    def _emit_display_mode_changed(self) -> None:
+        self.display_mode_changed.emit(self.display_mode())
+
+    def _emit_overlay_opacity_changed(self, value: int) -> None:
+        self.overlay_opacity_value.setText(f"{int(value)}%")
+        self.overlay_opacity_changed.emit(float(value) / 100.0)
 
     def _edit_color(self, item: QTableWidgetItem) -> None:
         if item.column() != 1:

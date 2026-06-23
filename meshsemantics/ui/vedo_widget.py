@@ -20,6 +20,7 @@ from meshsemantics.core.spline_selector import (
     install_drs_topology_cache,
     surface_selection_topology_input,
 )
+from meshsemantics.core.file_io import FileIO
 
 try:
     from vtkmodules.qt.QVTKOpenGLNativeWidget import QVTKOpenGLNativeWidget
@@ -39,6 +40,7 @@ class _MeshSemanticsInteractorCanvas(QVTKRenderWindowInteractor):
         Qt.Key.Key_E,
         Qt.Key.Key_C,
         Qt.Key.Key_M,
+        Qt.Key.Key_V,
         Qt.Key.Key_Return,
         Qt.Key.Key_Enter,
         Qt.Key.Key_Delete,
@@ -132,6 +134,9 @@ else:
 class VedoWidget(QWidget):
     mesh_loaded = pyqtSignal(int)
     _surface_cache_finished = pyqtSignal(int, object)
+    DISPLAY_SOURCE_COLOR = "source_color"
+    DISPLAY_LABEL_OVERLAY = "label_overlay"
+    DISPLAY_LABEL_ONLY = "label_only"
     _LANDMARK_RADIUS_RATIO = 0.0076
     _LANDMARK_MIN_RADIUS = 1e-3
 
@@ -163,8 +168,13 @@ class VedoWidget(QWidget):
         self.mesh = None
         self.base_labels = np.zeros(0, dtype=np.int32)
         self.display_labels = np.zeros(0, dtype=np.int32)
+        self.base_cell_rgb = np.zeros((0, 3), dtype=np.uint8)
         self.preview_cell_ids = np.zeros(0, dtype=np.int32)
         self._label_vtk_array = None
+        self._display_color_vtk_array = None
+        self._display_rgb_array = np.zeros((0, 3), dtype=np.uint8)
+        self.display_mode = self.DISPLAY_LABEL_OVERLAY
+        self.overlay_opacity = 0.4
         self.lookup_table = vtkLookupTable()
         self.lookup_table.IndexedLookupOff()
         self.lookup_table.SetNumberOfTableValues(257)
@@ -210,10 +220,13 @@ class VedoWidget(QWidget):
         self.mesh.filename = getattr(mesh, "filename", "")
         self.base_labels = np.asarray(labels, dtype=np.int32).reshape(-1).copy()
         self.display_labels = self.base_labels.copy()
+        packed_color = FileIO._read_cell_color(self.mesh, int(self.base_labels.size))
+        if packed_color is None or packed_color.size != self.base_labels.size:
+            packed_color = np.zeros(self.base_labels.size, dtype=np.uint32)
+        self.base_cell_rgb = FileIO.unpack_rgb(packed_color)
         self.preview_cell_ids = np.zeros(0, dtype=np.int32)
         self._apply_lookup_table(colormap)
-        self._bind_label_array()
-        self._mark_label_array_modified()
+        self._refresh_display_scalars()
         self.mesh.lighting("default").phong().linecolor("#000000").linewidth(0.08)
         self._ensure_interactor_ready()
         self.plotter.show(self.mesh, resetcam=True)
@@ -226,8 +239,11 @@ class VedoWidget(QWidget):
         self.mesh = None
         self.base_labels = np.zeros(0, dtype=np.int32)
         self.display_labels = np.zeros(0, dtype=np.int32)
+        self.base_cell_rgb = np.zeros((0, 3), dtype=np.uint8)
         self.preview_cell_ids = np.zeros(0, dtype=np.int32)
         self._label_vtk_array = None
+        self._display_color_vtk_array = None
+        self._display_rgb_array = np.zeros((0, 3), dtype=np.uint8)
         self.control_points_actor = None
         self.control_line_actor = None
         self.selected_control_actor = None
@@ -242,6 +258,24 @@ class VedoWidget(QWidget):
         if self.mesh is None:
             return
         self._apply_lookup_table(colormap)
+        self._refresh_display_scalars()
+        self.render()
+
+    def set_display_mode(self, mode: str) -> None:
+        if mode not in {self.DISPLAY_SOURCE_COLOR, self.DISPLAY_LABEL_OVERLAY, self.DISPLAY_LABEL_ONLY}:
+            return
+        if mode == self.display_mode:
+            return
+        self.display_mode = mode
+        self._refresh_display_scalars()
+        self.render()
+
+    def set_overlay_opacity(self, opacity: float) -> None:
+        next_opacity = float(np.clip(float(opacity), 0.0, 0.8))
+        if abs(next_opacity - self.overlay_opacity) < 1e-6:
+            return
+        self.overlay_opacity = next_opacity
+        self._refresh_display_scalars()
         self.render()
 
     def update_labels(self, labels: np.ndarray) -> None:
@@ -255,7 +289,7 @@ class VedoWidget(QWidget):
             self.base_labels[:] = incoming
             self.display_labels[:] = self.base_labels
             self.preview_cell_ids = np.zeros(0, dtype=np.int32)
-        self._mark_label_array_modified()
+        self._refresh_display_scalars()
         self.render()
 
     def preview_cells(self, cell_ids) -> None:
@@ -271,7 +305,7 @@ class VedoWidget(QWidget):
         if ids.size:
             self.display_labels[ids] = 256
         self.preview_cell_ids = ids
-        self._mark_label_array_modified()
+        self._refresh_display_scalars()
         self.render()
 
     def render(self) -> None:
@@ -418,9 +452,9 @@ class VedoWidget(QWidget):
         if self.mesh is None:
             return
         self._label_vtk_array = numpy_to_vtk(self.display_labels, deep=False)
-        self._label_vtk_array.SetName("Label")
+        self._label_vtk_array.SetName("DisplayLabel")
         self.mesh.dataset.GetCellData().SetScalars(self._label_vtk_array)
-        self.mesh.dataset.GetCellData().SetActiveScalars("Label")
+        self.mesh.dataset.GetCellData().SetActiveScalars("DisplayLabel")
         mapper = self.mesh.mapper
         mapper.SetScalarModeToUseCellData()
         mapper.SetColorModeToMapScalars()
@@ -428,14 +462,72 @@ class VedoWidget(QWidget):
         mapper.SetScalarRange(0.0, 256.0)
         mapper.ScalarVisibilityOn()
 
+    def _bind_display_color_array(self) -> None:
+        if self.mesh is None:
+            return
+        self._display_rgb_array = self._build_display_rgb()
+        self._display_color_vtk_array = numpy_to_vtk(self._display_rgb_array, deep=False)
+        self._display_color_vtk_array.SetName("DisplayColor")
+        self.mesh.dataset.GetCellData().SetScalars(self._display_color_vtk_array)
+        self.mesh.dataset.GetCellData().SetActiveScalars("DisplayColor")
+        mapper = self.mesh.mapper
+        mapper.SetScalarModeToUseCellData()
+        mapper.SetColorModeToDirectScalars()
+        mapper.ScalarVisibilityOn()
+
+    def _refresh_display_scalars(self) -> None:
+        if self.mesh is None:
+            return
+        if self.display_mode == self.DISPLAY_LABEL_ONLY:
+            self._bind_label_array()
+        else:
+            self._bind_display_color_array()
+        self._mark_label_array_modified()
+
+    def _build_display_rgb(self) -> np.ndarray:
+        cell_count = int(self.display_labels.size)
+        if self.base_cell_rgb.shape[0] == cell_count:
+            rgb = self.base_cell_rgb.astype(np.float32).copy()
+        else:
+            rgb = np.full((cell_count, 3), 232.0, dtype=np.float32)
+        if rgb.size and not np.any(rgb):
+            rgb[:] = 232.0
+
+        if self.display_mode == self.DISPLAY_LABEL_OVERLAY:
+            labels = self.base_labels.reshape(-1)
+            labeled = labels != 0
+            if np.any(labeled):
+                label_rgb = self._label_rgb_for_values(labels[labeled]).astype(np.float32)
+                alpha = float(self.overlay_opacity)
+                rgb[labeled] = rgb[labeled] * (1.0 - alpha) + label_rgb * alpha
+
+        preview_ids = self.preview_cell_ids
+        if preview_ids.size:
+            ids = preview_ids[(preview_ids >= 0) & (preview_ids < cell_count)]
+            rgb[ids] = np.asarray((136, 136, 136), dtype=np.float32)
+        return np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
+
+    def _label_rgb_for_values(self, labels: np.ndarray) -> np.ndarray:
+        values = np.asarray(labels, dtype=np.int32).reshape(-1)
+        output = np.zeros((values.size, 3), dtype=np.uint8)
+        default = self._lut_rgb(0)
+        for index, label in enumerate(values.tolist()):
+            output[index] = self._lut_rgb(int(label)) if int(label) != 256 else (136, 136, 136)
+        output[values == 0] = default
+        return output
+
+    def _lut_rgb(self, label: int) -> tuple[int, int, int]:
+        rgb = [0.0, 0.0, 0.0]
+        self.lookup_table.GetColor(float(label), rgb)
+        return tuple(int(round(channel * 255.0)) for channel in rgb)
+
     def _mark_label_array_modified(self) -> None:
         if self.mesh is None:
             return
-        if self._label_vtk_array is None:
-            self._bind_label_array()
         if self._label_vtk_array is not None:
             self._label_vtk_array.Modified()
-        self.mesh.dataset.GetCellData().SetActiveScalars("Label")
+        if self._display_color_vtk_array is not None:
+            self._display_color_vtk_array.Modified()
         self.mesh.dataset.GetCellData().Modified()
         self.mesh.dataset.Modified()
         mapper = self.mesh.mapper

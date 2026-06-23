@@ -91,6 +91,19 @@ class FileIO:
         return packed.copy()
 
     @staticmethod
+    def _read_cell_color_edge(mesh, n_cells: int) -> np.ndarray | None:
+        dataset = getattr(mesh, "dataset", None)
+        if dataset is None:
+            return None
+        array = dataset.GetCellData().GetArray("ColorEdge")
+        if array is None:
+            return None
+        values = np.asarray(vtk_to_numpy(array), dtype=np.float32).reshape(-1)
+        if values.size != n_cells:
+            return None
+        return values.copy()
+
+    @staticmethod
     def _candidate_point_color_arrays(dataset):
         point_data = dataset.GetPointData()
         scalars = point_data.GetScalars()
@@ -163,12 +176,54 @@ class FileIO:
         return None
 
     @classmethod
-    def _compute_cell_color_from_points(cls, mesh, n_cells: int) -> np.ndarray | None:
+    def _compute_cell_color_features_from_points(cls, mesh, n_cells: int) -> tuple[np.ndarray, np.ndarray] | None:
         dataset = getattr(mesh, "dataset", None)
         point_rgb = cls._read_point_rgb(mesh)
         if dataset is None or point_rgb is None:
             return None
+        features = cls._compute_triangle_cell_color_features(dataset, point_rgb, n_cells)
+        if features is not None:
+            return features
+        return cls._compute_cell_color_features_slow(dataset, point_rgb, n_cells)
+
+    @classmethod
+    def _compute_triangle_cell_color_features(
+        cls,
+        dataset,
+        point_rgb: np.ndarray,
+        n_cells: int,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        polys = dataset.GetPolys()
+        poly_data = None if polys is None else polys.GetData()
+        if poly_data is None or poly_data.GetNumberOfTuples() == 0:
+            return None
+        raw = np.asarray(vtk_to_numpy(poly_data), dtype=np.int64)
+        if raw.size != n_cells * 4:
+            return None
+        cells = raw.reshape(-1, 4)
+        if cells.shape[0] != n_cells or np.any(cells[:, 0] != 3):
+            return None
+        point_ids = cells[:, 1:4]
+        if point_ids.size == 0 or point_ids.min() < 0 or point_ids.max() >= point_rgb.shape[0]:
+            return None
+
+        triangle_rgb = point_rgb[point_ids].astype(np.float32)
+        mean_rgb = np.rint(triangle_rgb.mean(axis=1)).astype(np.uint8)
+        d01 = np.linalg.norm(triangle_rgb[:, 0] - triangle_rgb[:, 1], axis=1)
+        d02 = np.linalg.norm(triangle_rgb[:, 0] - triangle_rgb[:, 2], axis=1)
+        d12 = np.linalg.norm(triangle_rgb[:, 1] - triangle_rgb[:, 2], axis=1)
+        color_edge = np.maximum.reduce([d01, d02, d12]).astype(np.float32)
+        return cls.pack_rgb(mean_rgb), color_edge
+
+    @classmethod
+    def _compute_cell_color_features_slow(
+        cls,
+        dataset,
+        point_rgb: np.ndarray,
+        n_cells: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
         colors = np.zeros((n_cells, 3), dtype=np.uint8)
+        edges = np.zeros(n_cells, dtype=np.float32)
         for cell_id in range(n_cells):
             cell = dataset.GetCell(int(cell_id))
             point_ids = [
@@ -178,19 +233,59 @@ class FileIO:
             ]
             if not point_ids:
                 continue
-            colors[cell_id] = np.rint(point_rgb[point_ids].astype(np.float32).mean(axis=0)).astype(np.uint8)
-        return cls.pack_rgb(colors)
+            cell_colors = point_rgb[point_ids].astype(np.float32)
+            colors[cell_id] = np.rint(cell_colors.mean(axis=0)).astype(np.uint8)
+            if len(point_ids) < 2:
+                continue
+            max_distance = 0.0
+            for start in range(cell_colors.shape[0] - 1):
+                deltas = cell_colors[start + 1:] - cell_colors[start]
+                distances = np.linalg.norm(deltas, axis=1)
+                if distances.size:
+                    max_distance = max(max_distance, float(distances.max()))
+            edges[cell_id] = max_distance
+        return cls.pack_rgb(colors), edges
 
     @classmethod
-    def _ensure_cell_color(cls, mesh, n_cells: int) -> np.ndarray:
+    def _compute_cell_color_from_points(cls, mesh, n_cells: int) -> np.ndarray | None:
+        features = cls._compute_cell_color_features_from_points(mesh, n_cells)
+        return None if features is None else features[0]
+
+    @classmethod
+    def _compute_cell_color_edge_from_points(cls, mesh, n_cells: int) -> np.ndarray | None:
+        features = cls._compute_cell_color_features_from_points(mesh, n_cells)
+        return None if features is None else features[1]
+
+    @classmethod
+    def _ensure_cell_color_features(cls, mesh, n_cells: int) -> tuple[np.ndarray, np.ndarray]:
         packed = cls._read_cell_color(mesh, n_cells)
-        if packed is None:
-            packed = cls._compute_cell_color_from_points(mesh, n_cells)
+        edge = cls._read_cell_color_edge(mesh, n_cells)
+        if packed is None or edge is None:
+            computed = cls._compute_cell_color_features_from_points(mesh, n_cells)
+            if computed is not None:
+                computed_color, computed_edge = computed
+                if packed is None:
+                    packed = computed_color
+                if edge is None:
+                    edge = computed_edge
         if packed is None or packed.size != n_cells:
             packed = np.zeros(n_cells, dtype=np.uint32)
         packed = np.asarray(packed, dtype=np.uint32).reshape(-1)
         cls._write_cell_color(mesh, packed)
-        return packed
+
+        if edge is None or edge.size != n_cells:
+            edge = np.zeros(n_cells, dtype=np.float32)
+        edge = np.asarray(edge, dtype=np.float32).reshape(-1)
+        cls._write_cell_color_edge(mesh, edge)
+        return packed, edge
+
+    @classmethod
+    def _ensure_cell_color(cls, mesh, n_cells: int) -> np.ndarray:
+        return cls._ensure_cell_color_features(mesh, n_cells)[0]
+
+    @classmethod
+    def _ensure_cell_color_edge(cls, mesh, n_cells: int) -> np.ndarray:
+        return cls._ensure_cell_color_features(mesh, n_cells)[1]
 
     @staticmethod
     def _write_cell_color(mesh, packed_color: np.ndarray) -> None:
@@ -201,6 +296,18 @@ class FileIO:
         vtk_array = numpy_to_vtk(values, deep=True)
         vtk_array.SetName("Color")
         dataset.GetCellData().RemoveArray("Color")
+        dataset.GetCellData().AddArray(vtk_array)
+        dataset.Modified()
+
+    @staticmethod
+    def _write_cell_color_edge(mesh, color_edge: np.ndarray) -> None:
+        dataset = getattr(mesh, "dataset", None)
+        if dataset is None:
+            return
+        values = np.asarray(color_edge, dtype=np.float32).reshape(-1)
+        vtk_array = numpy_to_vtk(values, deep=True)
+        vtk_array.SetName("ColorEdge")
+        dataset.GetCellData().RemoveArray("ColorEdge")
         dataset.GetCellData().AddArray(vtk_array)
         dataset.Modified()
 
@@ -234,7 +341,7 @@ class FileIO:
             labels = resized
 
         mesh.celldata["Label"] = labels.astype(np.int32).reshape(-1, 1)
-        cls._ensure_cell_color(mesh, n_cells)
+        cls._ensure_cell_color_features(mesh, n_cells)
         mesh.dataset.GetCellData().SetActiveScalars("Label")
         mesh.dataset.Modified()
         return mesh, labels.astype(np.int32)
@@ -248,11 +355,7 @@ class FileIO:
             if cell_data.HasArray(transient_name):
                 cell_data.RemoveArray(transient_name)
         export_mesh.celldata["Label"] = np.asarray(labels, dtype=np.int32).reshape(-1, 1)
-        color = cls._read_cell_color(export_mesh, int(np.asarray(labels).size))
-        if color is None:
-            color = cls._compute_cell_color_from_points(export_mesh, int(np.asarray(labels).size))
-        if color is not None:
-            cls._write_cell_color(export_mesh, color)
+        cls._ensure_cell_color_features(export_mesh, int(np.asarray(labels).size))
 
         if cell_data.HasArray("Normals"):
             cell_data.RemoveArray("Normals")
